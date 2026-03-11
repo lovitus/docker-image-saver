@@ -180,8 +180,12 @@ func (c *registryClient) getManifest(ref imageRef, manifestRef string) ([]byte, 
 }
 
 func (c *registryClient) getBlob(ref imageRef, digest string) ([]byte, string, error) {
-	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", ref.RegistryHost(), ref.Repository, digest)
-	body, contentType, _, err := c.fetch(ref, url, "")
+	rc, contentType, err := c.openBlob(ref, digest)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, "", err
 	}
