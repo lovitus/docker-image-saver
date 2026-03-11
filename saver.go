@@ -2,7 +2,7 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
+	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -71,7 +71,11 @@ func runNonInteractive(opts runOptions) error {
 	if err := writeDockerTar(client, ref, singleManifest, platforms, selected, opts.Output, opts.Stdout); err != nil {
 		return err
 	}
-	logf(opts.Stdout, "Saved: %s\n", opts.Output)
+	result, err := summarizeSavedFile(opts.Output)
+	if err != nil {
+		return err
+	}
+	printSaveResult(opts.Stdout, result)
 	return nil
 }
 
@@ -224,11 +228,7 @@ func writeDockerTar(
 				}
 
 				logf(logOut, "Downloading layer %d/%d for %s\n", li+1, len(manifest.Layers), p.Platform.String())
-				layerBytes, err := fetchLayerTarBytes(client, ref, layer)
-				if err != nil {
-					return fmt.Errorf("download layer %s: %w", layer.Digest, err)
-				}
-				if err := writeTarBytes(tw, layerTarPath, layerBytes, 0o644); err != nil {
+				if err := writeLayerToTar(tw, client, ref, layer, layerTarPath); err != nil {
 					return err
 				}
 				writtenLayers[layerID] = true
@@ -268,48 +268,119 @@ func writeDockerTar(
 	return nil
 }
 
-func fetchLayerTarBytes(client *registryClient, ref imageRef, layer descriptor) ([]byte, error) {
+func writeLayerToTar(tw *tar.Writer, client *registryClient, ref imageRef, layer descriptor, tarPath string) error {
+	stream, err := openLayerStream(client, ref, layer)
+	if err != nil {
+		return fmt.Errorf("open layer %s: %w", layer.Digest, err)
+	}
+
+	if !stream.Decoded && layer.Size > 0 {
+		err = writeTarStream(tw, tarPath, stream.Reader, layer.Size, 0o644)
+		closeErr := stream.Reader.Close()
+		if err != nil {
+			return fmt.Errorf("stream layer %s: %w", layer.Digest, err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close layer stream %s: %w", layer.Digest, closeErr)
+		}
+		return nil
+	}
+
+	uncompressedSize, err := io.Copy(io.Discard, stream.Reader)
+	closeErr := stream.Reader.Close()
+	if err != nil {
+		return fmt.Errorf("measure layer %s: %w", layer.Digest, err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close layer stream %s: %w", layer.Digest, closeErr)
+	}
+
+	stream, err = openLayerStream(client, ref, layer)
+	if err != nil {
+		return fmt.Errorf("re-open layer %s: %w", layer.Digest, err)
+	}
+	err = writeTarStream(tw, tarPath, stream.Reader, uncompressedSize, 0o644)
+	closeErr = stream.Reader.Close()
+	if err != nil {
+		return fmt.Errorf("stream layer %s: %w", layer.Digest, err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close layer stream %s: %w", layer.Digest, closeErr)
+	}
+	return nil
+}
+
+type layerStream struct {
+	Reader  io.ReadCloser
+	Decoded bool
+}
+
+func openLayerStream(client *registryClient, ref imageRef, layer descriptor) (layerStream, error) {
 	rc, contentType, err := client.openBlob(ref, layer.Digest)
 	if err != nil {
-		return nil, err
+		return layerStream{}, err
 	}
-	defer rc.Close()
 
-	mediaType := layer.MediaType
+	mediaType := normalizeMediaType(layer.MediaType)
 	if mediaType == "" {
 		mediaType = normalizeMediaType(contentType)
 	}
-	mediaType = normalizeMediaType(mediaType)
 
-	var reader io.Reader = rc
 	switch mediaType {
-	case mtDockerLayerGzip, mtOCILayerTarGzip, mtDockerForeignLayerGz:
-		gz, err := gzip.NewReader(rc)
-		if err != nil {
-			return nil, fmt.Errorf("create gzip reader: %w", err)
-		}
-		defer gz.Close()
-		reader = gz
-	case mtDockerLayerTar, mtOCILayerTar, mtDockerForeignLayer, "":
-		reader = rc
 	case mtOCILayerTarZstd:
-		return nil, fmt.Errorf("zstd-compressed layers are not supported in this build")
-	default:
-		if strings.Contains(mediaType, "gzip") {
-			gz, err := gzip.NewReader(rc)
-			if err != nil {
-				return nil, fmt.Errorf("create gzip reader: %w", err)
-			}
-			defer gz.Close()
-			reader = gz
-		}
+		_ = rc.Close()
+		return layerStream{}, fmt.Errorf("zstd-compressed layers are not supported in this build")
+	case mtDockerLayerGzip, mtOCILayerTarGzip, mtDockerForeignLayerGz:
+		return openGzipLayerStream(rc)
+	case mtDockerLayerTar, mtOCILayerTar, mtDockerForeignLayer:
+		return layerStream{Reader: rc, Decoded: false}, nil
 	}
 
-	buf := bytes.NewBuffer(nil)
-	if _, err := io.Copy(buf, reader); err != nil {
-		return nil, err
+	if strings.Contains(mediaType, "gzip") {
+		return openGzipLayerStream(rc)
 	}
-	return buf.Bytes(), nil
+
+	// Media type can be omitted on some registries. Detect gzip magic as fallback.
+	buffered := bufio.NewReader(rc)
+	if magic, err := buffered.Peek(2); err == nil && len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(buffered)
+		if err != nil {
+			_ = rc.Close()
+			return layerStream{}, fmt.Errorf("create gzip reader: %w", err)
+		}
+		return layerStream{Reader: &stackedReadCloser{Reader: gz, closers: []io.Closer{gz, rc}}, Decoded: true}, nil
+	}
+
+	return layerStream{Reader: &readerWithCloser{Reader: buffered, Closer: rc}, Decoded: false}, nil
+}
+
+func openGzipLayerStream(rc io.ReadCloser) (layerStream, error) {
+	gz, err := gzip.NewReader(rc)
+	if err != nil {
+		_ = rc.Close()
+		return layerStream{}, fmt.Errorf("create gzip reader: %w", err)
+	}
+	return layerStream{Reader: &stackedReadCloser{Reader: gz, closers: []io.Closer{gz, rc}}, Decoded: true}, nil
+}
+
+type stackedReadCloser struct {
+	io.Reader
+	closers []io.Closer
+}
+
+func (s *stackedReadCloser) Close() error {
+	var firstErr error
+	for i := len(s.closers) - 1; i >= 0; i-- {
+		if err := s.closers[i].Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+type readerWithCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func outputRepoAndTag(ref imageRef, p platform, addPlatform bool) (string, string) {
@@ -403,6 +474,30 @@ func writeTarBytes(tw *tar.Writer, name string, data []byte, mode int64) error {
 	return nil
 }
 
+func writeTarStream(tw *tar.Writer, name string, r io.Reader, size int64, mode int64) error {
+	name = strings.TrimPrefix(name, "/")
+	if size < 0 {
+		return fmt.Errorf("invalid size %d for tar entry %s", size, name)
+	}
+	hdr := &tar.Header{
+		Name:    name,
+		Mode:    mode,
+		Size:    size,
+		ModTime: time.Now().UTC(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	written, err := io.Copy(tw, r)
+	if err != nil {
+		return err
+	}
+	if written != size {
+		return fmt.Errorf("tar entry %s size mismatch: header=%d written=%d", name, size, written)
+	}
+	return nil
+}
+
 func normalizeMediaType(contentType string) string {
 	if contentType == "" {
 		return ""
@@ -417,6 +512,30 @@ func isUnknownPlatform(p platform) bool {
 	osName := strings.ToLower(strings.TrimSpace(p.OS))
 	arch := strings.ToLower(strings.TrimSpace(p.Architecture))
 	return osName == "" || arch == "" || osName == "unknown" || arch == "unknown"
+}
+
+type saveResult struct {
+	AbsPath string
+	Size    int64
+}
+
+func summarizeSavedFile(path string) (saveResult, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return saveResult{}, fmt.Errorf("resolve absolute output path: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return saveResult{}, fmt.Errorf("stat output file: %w", err)
+	}
+	return saveResult{AbsPath: abs, Size: info.Size()}, nil
+}
+
+func printSaveResult(out io.Writer, result saveResult) {
+	mb := float64(result.Size) / (1024.0 * 1024.0)
+	logf(out, "Status: SUCCESS\n")
+	logf(out, "Output: %s\n", result.AbsPath)
+	logf(out, "Size: %d bytes (%.2f MiB)\n", result.Size, mb)
 }
 
 func selectPlatforms(selection string, total int) ([]int, error) {

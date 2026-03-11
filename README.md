@@ -1,10 +1,10 @@
-# dia (Docker Image Archiver)
+# docker-image-saver (`dia`)
 
 `dia` saves Docker/OCI images directly from a registry into a `docker load` compatible tar file, without using the Docker daemon.
 
 ## Highlights
 
-- Single binary with both CLI and terminal UI (TUI).
+- Single binary with both CLI mode and interactive wizard mode.
 - Direct Docker Registry HTTP API V2 implementation (`net/http`), no local Docker dependency.
 - Streams layers from registry into the final archive without intermediate layer files on disk.
 - Proxy-aware: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and explicit `--proxy` (including `socks5://`).
@@ -17,29 +17,36 @@
 Build from source:
 
 ```bash
-go build -o dia .
+go build -o docker-image-saver .
 ```
 
 ## Usage
 
-### Interactive mode (TUI)
+### Wizard mode (no arguments)
 
 Run with no arguments:
 
 ```bash
-./dia
+./docker-image-saver
 ```
+
+Wizard flow:
+- image name/tag
+- output tar path
+- optional proxy/auth settings
+- fetch manifest and show architecture list
+- architecture selection (`all`, `1,2,5-`, etc.)
 
 ### CLI mode
 
 ```bash
-./dia --image alpine:latest --output alpine.tar
+./docker-image-saver --image alpine:latest --output alpine.tar
 ```
 
-Or positional image/output:
+Subcommand style is also supported:
 
 ```bash
-./dia alpine:latest alpine.tar
+./docker-image-saver pull alpine:latest alpine.tar
 ```
 
 ### Multi-arch selection
@@ -48,10 +55,10 @@ When the image tag points to a manifest list, use `--arch` to pick entries by 1-
 
 ```bash
 # single index
-./dia --image alpine:latest --arch 1 --output alpine-amd64.tar
+./docker-image-saver --image alpine:latest --arch 1 --output alpine-amd64.tar
 
 # multiple indices and ranges
-./dia --image alpine:latest --arch 1,2,5- --output alpine-multi.tar
+./docker-image-saver --image alpine:latest --arch 1,2,5- --output alpine-multi.tar
 ```
 
 If `--arch` is omitted, all architectures are selected by default.
@@ -61,6 +68,14 @@ If `--arch` is omitted, all architectures are selected by default.
 - Environment variables: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`
 - Explicit override: `--proxy http://127.0.0.1:8080`
 - SOCKS5: `--proxy socks5://127.0.0.1:1080`
+
+## Completion output
+
+After a successful save (CLI or wizard), the tool prints:
+
+- `Status: SUCCESS`
+- absolute output path
+- output file size in bytes and MiB
 
 ## Docker load compatibility
 

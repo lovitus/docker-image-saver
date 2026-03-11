@@ -24,7 +24,14 @@ type cliOptions struct {
 
 func main() {
 	if len(os.Args) == 1 {
-		if err := runTUI(version); err != nil {
+		if err := runWizard(version); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isWizardCommand(os.Args[1:]) {
+		if err := runWizard(version); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -73,6 +80,9 @@ func main() {
 
 func parseCLI(args []string) (cliOptions, error) {
 	var opts cliOptions
+	args = normalizeCLIArgs(args)
+	args = reorderArgsForFlagSet(args)
+
 	fs := flag.NewFlagSet("dia", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.Image, "image", "", "image reference (example: alpine:latest)")
@@ -105,6 +115,70 @@ func parseCLI(args []string) (cliOptions, error) {
 		opts.Username = os.Getenv("DIA_REGISTRY_USERNAME")
 	}
 	return opts, nil
+}
+
+func normalizeCLIArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	cmd := strings.ToLower(strings.TrimSpace(args[0]))
+	switch cmd {
+	case "pull", "save":
+		return args[1:]
+	default:
+		return args
+	}
+}
+
+func isWizardCommand(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	cmd := strings.ToLower(strings.TrimSpace(args[0]))
+	return cmd == "wizard" || cmd == "interactive"
+}
+
+func reorderArgsForFlagSet(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	expectsValue := map[string]bool{
+		"--image":    true,
+		"--output":   true,
+		"--arch":     true,
+		"--proxy":    true,
+		"--username": true,
+		"--password": true,
+	}
+	flags := make([]string, 0, len(args))
+	positional := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" {
+			continue
+		}
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
+			continue
+		}
+
+		flags = append(flags, arg)
+		name := arg
+		if eq := strings.Index(name, "="); eq >= 0 {
+			name = name[:eq]
+		}
+		if expectsValue[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+
+	return append(flags, positional...)
 }
 
 func defaultOutputTar(image string) (string, error) {

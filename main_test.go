@@ -74,3 +74,28 @@ func TestSelectPlatforms(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCLIWithSubcommandAndTrailingFlags(t *testing.T) {
+	opts, err := parseCLI([]string{
+		"pull",
+		"alpine:latest",
+		"/tmp/alpine.tar",
+		"--arch", "1,2",
+		"--proxy", "socks5://127.0.0.1:1080",
+	})
+	if err != nil {
+		t.Fatalf("parseCLI returned error: %v", err)
+	}
+	if opts.Image != "alpine:latest" {
+		t.Fatalf("unexpected image: %q", opts.Image)
+	}
+	if opts.Output != "/tmp/alpine.tar" {
+		t.Fatalf("unexpected output: %q", opts.Output)
+	}
+	if opts.Arch != "1,2" {
+		t.Fatalf("unexpected arch: %q", opts.Arch)
+	}
+	if opts.Proxy != "socks5://127.0.0.1:1080" {
+		t.Fatalf("unexpected proxy: %q", opts.Proxy)
+	}
+}
