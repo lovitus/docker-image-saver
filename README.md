@@ -69,7 +69,8 @@ If `--arch` is omitted, all architectures are selected by default.
 
 - Environment variables: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`
 - Explicit override: `--proxy http://127.0.0.1:8080`
-- SOCKS5: `--proxy socks5://127.0.0.1:1080`
+- SOCKS5 (local DNS): `--proxy socks5://127.0.0.1:1080`
+- SOCKS5H (proxy DNS): `--proxy socks5h://127.0.0.1:1080`
 
 ## Completion output
 

@@ -40,7 +40,12 @@ func runWizard(version string) error {
 	}
 	outputPath = filepath.Clean(outputPath)
 
-	proxy, err := promptWithDefault(in, out, "3) Proxy URL (optional)", "")
+	proxy, err := promptWithHint(
+		in,
+		out,
+		"3) Proxy URL (optional)",
+		faintText("(socks5://127.0.0.1:7897 or http://127.0.0.1:7890)"),
+	)
 	if err != nil {
 		return err
 	}
@@ -116,6 +121,19 @@ func promptWithDefault(in *bufio.Reader, out io.Writer, label, defaultValue stri
 	return line, nil
 }
 
+func promptWithHint(in *bufio.Reader, out io.Writer, label, hint string) (string, error) {
+	if strings.TrimSpace(hint) == "" {
+		fmt.Fprintf(out, "%s: ", label)
+	} else {
+		fmt.Fprintf(out, "%s %s: ", label, hint)
+	}
+	line, err := in.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
 func promptRequiredWithDefault(in *bufio.Reader, out io.Writer, label, defaultValue string) (string, error) {
 	for {
 		value, err := promptWithDefault(in, out, label, defaultValue)
@@ -153,4 +171,14 @@ func promptYesNo(in *bufio.Reader, out io.Writer, label string, defaultValue boo
 			fmt.Fprintln(out, "Please input y/yes or n/no.")
 		}
 	}
+}
+
+func faintText(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	if os.Getenv("NO_COLOR") != "" || strings.EqualFold(os.Getenv("TERM"), "dumb") {
+		return text
+	}
+	return "\x1b[90m" + text + "\x1b[0m"
 }

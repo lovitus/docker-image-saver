@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -137,19 +138,81 @@ func newHTTPClient(proxyOpt string, insecure bool) (*http.Client, error) {
 				return nil, fmt.Errorf("unable to use socks proxy %q: %w", proxyAddr, err)
 			}
 			transport.Proxy = nil
+			remoteDNS := scheme == "socks5h"
 			if contextDialer, ok := dialer.(xproxy.ContextDialer); ok {
-				transport.DialContext = contextDialer.DialContext
+				transport.DialContext = socksDialContext(contextDialer.DialContext, proxyAddr, remoteDNS)
 			} else {
-				transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				}
+				transport.DialContext = socksDialContext(
+					func(ctx context.Context, network, addr string) (net.Conn, error) { return dialer.Dial(network, addr) },
+					proxyAddr,
+					remoteDNS,
+				)
 			}
 		default:
-			return nil, fmt.Errorf("unsupported proxy scheme %q (supported: http, https, socks5)", u.Scheme)
+			return nil, fmt.Errorf("unsupported proxy scheme %q (supported: http, https, socks5, socks5h)", u.Scheme)
 		}
 	}
 
 	return &http.Client{Timeout: defaultHTTPTimeout, Transport: transport}, nil
+}
+
+func socksDialContext(
+	baseDial func(ctx context.Context, network, addr string) (net.Conn, error),
+	proxyAddr string,
+	remoteDNS bool,
+) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		targetAddr := addr
+		if !remoteDNS {
+			resolved, err := resolveLocalTargetAddr(ctx, addr)
+			if err != nil {
+				return nil, fmt.Errorf("socks5 local DNS resolve failed for %s: %w", addr, err)
+			}
+			targetAddr = resolved
+		}
+		conn, err := baseDial(ctx, network, targetAddr)
+		if err != nil {
+			mode := "remote DNS"
+			if !remoteDNS {
+				mode = "local DNS"
+			}
+			return nil, fmt.Errorf("socks proxy connect failed via %s (%s) to %s: %w", proxyAddr, mode, addr, err)
+		}
+		return conn, nil
+	}
+}
+
+func resolveLocalTargetAddr(ctx context.Context, addr string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return addr, nil
+	}
+
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return "", err
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IPs found")
+	}
+
+	// Prefer IPv4 for better compatibility with many local proxy setups.
+	slices.SortFunc(ips, func(a, b net.IP) int {
+		a4 := a.To4() != nil
+		b4 := b.To4() != nil
+		switch {
+		case a4 && !b4:
+			return -1
+		case !a4 && b4:
+			return 1
+		default:
+			return 0
+		}
+	})
+	return net.JoinHostPort(ips[0].String(), port), nil
 }
 
 func firstProxyEnv() string {

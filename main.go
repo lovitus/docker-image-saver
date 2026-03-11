@@ -88,7 +88,7 @@ func parseCLI(args []string) (cliOptions, error) {
 	fs.StringVar(&opts.Image, "image", "", "image reference (example: alpine:latest)")
 	fs.StringVar(&opts.Output, "output", "", "output tar path")
 	fs.StringVar(&opts.Arch, "arch", "", "architecture selection indices (example: 1,2,5-)")
-	fs.StringVar(&opts.Proxy, "proxy", "", "explicit proxy URL (supports http(s):// and socks5://)")
+	fs.StringVar(&opts.Proxy, "proxy", "", "explicit proxy URL (supports http(s)://, socks5:// local DNS, socks5h:// remote DNS)")
 	fs.StringVar(&opts.Username, "username", "", "registry username")
 	fs.StringVar(&opts.Password, "password", "", "registry password")
 	fs.BoolVar(&opts.Insecure, "insecure", false, "skip TLS verification")
