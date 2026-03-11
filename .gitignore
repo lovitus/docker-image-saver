@@ -1,0 +1,11 @@
+# binaries
+/dia
+/docker-image-saver
+/dist/
+*.exe
+
+# archives
+*.tar
+
+# misc
+.DS_Store
