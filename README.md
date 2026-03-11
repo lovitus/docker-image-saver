@@ -9,6 +9,7 @@
 - Streams layers from registry into the final archive without intermediate layer files on disk.
 - Proxy-aware: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and explicit `--proxy` (including `socks5://`).
 - Multi-arch aware: supports manifest lists and architecture selection.
+- When multiple architectures are selected, each platform is exported into its own tar file.
 - Cross-platform builds (Linux, macOS, Windows) via GitHub Actions release workflow.
 - Termux support via standard `linux/arm64` binary (no root, no APK packaging).
 
@@ -36,6 +37,7 @@ Wizard flow:
 - optional proxy/auth settings
 - fetch manifest and show architecture list
 - architecture selection (`all`, `1,2,5-`, etc.)
+- export separate tar files per selected platform (`os/arch[/variant]`)
 
 ### CLI mode
 
@@ -74,8 +76,11 @@ If `--arch` is omitted, all architectures are selected by default.
 After a successful save (CLI or wizard), the tool prints:
 
 - `Status: SUCCESS`
-- absolute output path
-- output file size in bytes and MiB
+- absolute output path(s)
+- output file size(s) in bytes and MiB
+- selected platform(s)
+- generated platform index file (`*_platforms.json`)
+- manual `docker load -i` commands for each tar
 
 ## Docker load compatibility
 

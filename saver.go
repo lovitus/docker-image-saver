@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,9 +45,6 @@ func runNonInteractive(opts runOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(filepath.Clean(opts.Output)), 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
 
 	client, err := newRegistryClient(opts.Proxy, opts.Username, opts.Password, opts.Insecure)
 	if err != nil {
@@ -68,15 +66,93 @@ func runNonInteractive(opts runOptions) error {
 	for _, idx := range selected {
 		logf(opts.Stdout, "Selected [%d] %s\n", idx+1, platforms[idx].Platform.String())
 	}
-	if err := writeDockerTar(client, ref, singleManifest, platforms, selected, opts.Output, opts.Stdout); err != nil {
-		return err
-	}
-	result, err := summarizeSavedFile(opts.Output)
+	report, err := exportSelectedPlatforms(client, ref, singleManifest, platforms, selected, opts.Output, opts.Stdout)
 	if err != nil {
 		return err
 	}
-	printSaveResult(opts.Stdout, result)
+	printExportReport(opts.Stdout, report)
 	return nil
+}
+
+type exportedArchive struct {
+	Platform platform
+	Result   saveResult
+}
+
+type exportReport struct {
+	Image      string
+	Archives   []exportedArchive
+	IndexPath  string
+	OutputBase string
+}
+
+type platformIndexFile struct {
+	Image       string                  `json:"image"`
+	GeneratedAt string                  `json:"generated_at"`
+	Archives    []platformIndexFileItem `json:"archives"`
+}
+
+type platformIndexFileItem struct {
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+	Variant      string `json:"variant,omitempty"`
+	TarPath      string `json:"tar_path"`
+	SizeBytes    int64  `json:"size_bytes"`
+}
+
+func exportSelectedPlatforms(
+	client *registryClient,
+	ref imageRef,
+	singleManifest *imageManifest,
+	platforms []platformOption,
+	selected []int,
+	outputPath string,
+	logOut io.Writer,
+) (exportReport, error) {
+	report := exportReport{
+		Image:      ref.DisplayTag(),
+		OutputBase: filepath.Clean(outputPath),
+	}
+	if len(selected) == 0 {
+		return report, fmt.Errorf("no architectures selected")
+	}
+
+	outputs, err := perPlatformOutputs(outputPath, platforms, selected)
+	if err != nil {
+		return report, err
+	}
+
+	report.Archives = make([]exportedArchive, 0, len(selected))
+	for i, idx := range selected {
+		if idx < 0 || idx >= len(platforms) {
+			return report, fmt.Errorf("selected index %d out of range", idx+1)
+		}
+		outPath := outputs[i]
+		if err := os.MkdirAll(filepath.Dir(filepath.Clean(outPath)), 0o755); err != nil {
+			return report, fmt.Errorf("create output directory: %w", err)
+		}
+		if len(selected) > 1 {
+			logf(logOut, "\nSaving archive for %s -> %s\n", platforms[idx].Platform.String(), outPath)
+		}
+		if err := writeDockerTar(client, ref, singleManifest, platforms, []int{idx}, outPath, logOut); err != nil {
+			return report, err
+		}
+		result, err := summarizeSavedFile(outPath)
+		if err != nil {
+			return report, err
+		}
+		report.Archives = append(report.Archives, exportedArchive{
+			Platform: platforms[idx].Platform,
+			Result:   result,
+		})
+	}
+
+	indexPath, err := writePlatformIndexFile(report.OutputBase, report.Image, report.Archives)
+	if err != nil {
+		return report, err
+	}
+	report.IndexPath = indexPath
+	return report, nil
 }
 
 func resolvePlatforms(client *registryClient, ref imageRef) ([]platformOption, *imageManifest, error) {
@@ -531,11 +607,145 @@ func summarizeSavedFile(path string) (saveResult, error) {
 	return saveResult{AbsPath: abs, Size: info.Size()}, nil
 }
 
-func printSaveResult(out io.Writer, result saveResult) {
-	mb := float64(result.Size) / (1024.0 * 1024.0)
+func sizeMiB(size int64) float64 {
+	return float64(size) / (1024.0 * 1024.0)
+}
+
+func printExportReport(out io.Writer, report exportReport) {
 	logf(out, "Status: SUCCESS\n")
-	logf(out, "Output: %s\n", result.AbsPath)
-	logf(out, "Size: %d bytes (%.2f MiB)\n", result.Size, mb)
+	if len(report.Archives) == 1 {
+		item := report.Archives[0]
+		logf(out, "Output: %s\n", item.Result.AbsPath)
+		logf(out, "Size: %d bytes (%.2f MiB)\n", item.Result.Size, sizeMiB(item.Result.Size))
+		logf(out, "Platform: %s\n", item.Platform.String())
+	} else {
+		logf(out, "Archives (%d):\n", len(report.Archives))
+		for _, item := range report.Archives {
+			logf(out, "- %s -> %s (%d bytes, %.2f MiB)\n",
+				item.Platform.String(), item.Result.AbsPath, item.Result.Size, sizeMiB(item.Result.Size))
+		}
+	}
+	if report.IndexPath != "" {
+		logf(out, "Platform index: %s\n", report.IndexPath)
+	}
+	logf(out, "\nManual Docker load:\n")
+	for _, item := range report.Archives {
+		logf(out, "docker load -i %s\n", shellQuotePath(item.Result.AbsPath))
+	}
+	logf(out, "docker image ls\n")
+}
+
+func shellQuotePath(path string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(path, `"`, `\"`) + `"`
+	}
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
+}
+
+func perPlatformOutputs(outputBase string, platforms []platformOption, selected []int) ([]string, error) {
+	if len(selected) == 1 {
+		return []string{filepath.Clean(outputBase)}, nil
+	}
+	used := make(map[string]int)
+	outputs := make([]string, 0, len(selected))
+	for _, idx := range selected {
+		if idx < 0 || idx >= len(platforms) {
+			return nil, fmt.Errorf("selected index %d out of range", idx+1)
+		}
+		candidate := derivePlatformOutputPath(outputBase, platforms[idx].Platform)
+		used[candidate]++
+		if used[candidate] > 1 {
+			candidate = addNumericSuffix(candidate, used[candidate]-1)
+		}
+		outputs = append(outputs, candidate)
+	}
+	return outputs, nil
+}
+
+func derivePlatformOutputPath(outputBase string, p platform) string {
+	clean := filepath.Clean(outputBase)
+	ext := filepath.Ext(clean)
+	if ext == "" {
+		ext = ".tar"
+		clean = clean + ext
+	}
+	prefix := strings.TrimSuffix(clean, ext)
+	return prefix + "_" + platformSuffix(p) + ext
+}
+
+func platformSuffix(p platform) string {
+	osName := sanitizeComponent(strings.TrimSpace(p.OS))
+	arch := sanitizeComponent(strings.TrimSpace(p.Architecture))
+	variant := sanitizeComponent(strings.TrimSpace(p.Variant))
+	if osName == "" {
+		osName = "unknownos"
+	}
+	if arch == "" {
+		arch = "unknownarch"
+	}
+	suffix := osName + "_" + arch
+	if variant != "" {
+		suffix += "_" + variant
+	}
+	return suffix
+}
+
+func sanitizeComponent(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "/", "-")
+	value = strings.ReplaceAll(value, ":", "-")
+	value = strings.ReplaceAll(value, " ", "-")
+	value = strings.ToLower(value)
+	return value
+}
+
+func addNumericSuffix(path string, n int) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return fmt.Sprintf("%s_%d%s", base, n, ext)
+}
+
+func platformIndexPath(outputBase string) string {
+	clean := filepath.Clean(outputBase)
+	ext := filepath.Ext(clean)
+	if ext == "" {
+		return clean + "_platforms.json"
+	}
+	return strings.TrimSuffix(clean, ext) + "_platforms.json"
+}
+
+func writePlatformIndexFile(outputBase, image string, archives []exportedArchive) (string, error) {
+	indexPath := platformIndexPath(outputBase)
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
+		return "", fmt.Errorf("create platform index directory: %w", err)
+	}
+	records := make([]platformIndexFileItem, 0, len(archives))
+	for _, archive := range archives {
+		records = append(records, platformIndexFileItem{
+			OS:           archive.Platform.OS,
+			Architecture: archive.Platform.Architecture,
+			Variant:      archive.Platform.Variant,
+			TarPath:      archive.Result.AbsPath,
+			SizeBytes:    archive.Result.Size,
+		})
+	}
+	payload := platformIndexFile{
+		Image:       image,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Archives:    records,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode platform index: %w", err)
+	}
+	if err := os.WriteFile(indexPath, append(data, '\n'), 0o644); err != nil {
+		return "", fmt.Errorf("write platform index file: %w", err)
+	}
+	abs, err := filepath.Abs(indexPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve platform index absolute path: %w", err)
+	}
+	return abs, nil
 }
 
 func selectPlatforms(selection string, total int) ([]int, error) {

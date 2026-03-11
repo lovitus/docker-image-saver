@@ -88,21 +88,14 @@ func runWizard(version string) error {
 		return fmt.Errorf("no architectures selected")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
 	for _, idx := range selected {
 		fmt.Fprintf(out, "Selected [%d] %s\n", idx+1, platforms[idx].Platform.String())
 	}
-	if err := writeDockerTar(client, ref, singleManifest, platforms, selected, outputPath, out); err != nil {
-		return err
-	}
-
-	result, err := summarizeSavedFile(outputPath)
+	report, err := exportSelectedPlatforms(client, ref, singleManifest, platforms, selected, outputPath, out)
 	if err != nil {
 		return err
 	}
-	printSaveResult(out, result)
+	printExportReport(out, report)
 	return nil
 }
 
