@@ -9,7 +9,8 @@
 - Streams layers from registry into the final archive without intermediate layer files on disk.
 - Proxy-aware: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and explicit `--proxy` (including `socks5://`).
 - Multi-arch aware: supports manifest lists and architecture selection.
-- Cross-platform builds (Linux, macOS, Windows, Android) via GitHub Actions release workflow.
+- Cross-platform builds (Linux, macOS, Windows) via GitHub Actions release workflow.
+- Termux support via standard `linux/arm64` binary (no root, no APK packaging).
 
 ## Install
 
@@ -81,7 +82,7 @@ docker load -i alpine.tar
 `.github/workflows/release.yml`:
 
 - runs tests
-- cross-compiles all `go tool dist list` targets for OS: `linux`, `darwin`, `windows`, `android`
+- cross-compiles all `go tool dist list` targets for OS: `linux`, `darwin`, `windows`
 - publishes binaries and checksums on tag push (`v*`)
 
 ## Notes

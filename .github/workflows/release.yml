@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
-          targets=$(go tool dist list | grep -E '^(linux|darwin|windows|android)/')
+          targets=$(go tool dist list | grep -E '^(linux|darwin|windows)/')
           echo "Building targets:"
           echo "$targets"
 
@@ -40,10 +40,6 @@ jobs:
             [ -z "$target" ] && continue
             GOOS="${target%/*}"
             GOARCH="${target#*/}"
-            if [ "$GOOS/$GOARCH" = "android/386" ]; then
-              echo "-> $target (skipped: requires cgo toolchain)"
-              continue
-            fi
             EXT=""
             if [ "$GOOS" = "windows" ]; then
               EXT=".exe"
