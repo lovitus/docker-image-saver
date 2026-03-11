@@ -40,6 +40,10 @@ jobs:
             [ -z "$target" ] && continue
             GOOS="${target%/*}"
             GOARCH="${target#*/}"
+            if [ "$GOOS/$GOARCH" = "android/386" ]; then
+              echo "-> $target (skipped: requires cgo toolchain)"
+              continue
+            fi
             EXT=""
             if [ "$GOOS" = "windows" ]; then
               EXT=".exe"
