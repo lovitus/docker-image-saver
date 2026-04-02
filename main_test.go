@@ -99,3 +99,23 @@ func TestParseCLIWithSubcommandAndTrailingFlags(t *testing.T) {
 		t.Fatalf("unexpected proxy: %q", opts.Proxy)
 	}
 }
+
+func TestParseCLIPreservesPullGUIImage(t *testing.T) {
+	opts, err := parseCLI([]string{"pull", "gui"})
+	if err != nil {
+		t.Fatalf("parseCLI returned error: %v", err)
+	}
+	if opts.Image != "gui" {
+		t.Fatalf("unexpected image: %q", opts.Image)
+	}
+}
+
+func TestParseCLIPreservesSaveGUIImage(t *testing.T) {
+	opts, err := parseCLI([]string{"save", "gui"})
+	if err != nil {
+		t.Fatalf("parseCLI returned error: %v", err)
+	}
+	if opts.Image != "gui" {
+		t.Fatalf("unexpected image: %q", opts.Image)
+	}
+}

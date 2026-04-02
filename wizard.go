@@ -96,7 +96,11 @@ func runWizard(version string) error {
 	for _, idx := range selected {
 		fmt.Fprintf(out, "Selected [%d] %s\n", idx+1, platforms[idx].Platform.String())
 	}
-	report, err := exportSelectedPlatforms(client, ref, singleManifest, platforms, selected, outputPath, out)
+	hooks := &exportHooks{
+		Log:      out,
+		Progress: newTextProgressSink(out),
+	}
+	report, err := exportSelectedPlatforms(client, ref, singleManifest, platforms, selected, outputPath, hooks)
 	if err != nil {
 		return err
 	}

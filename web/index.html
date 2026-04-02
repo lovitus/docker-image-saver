@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dia GUI</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --panel: #fffdf8;
+      --ink: #1d1d1b;
+      --muted: #6f675c;
+      --line: #d7ccbc;
+      --accent: #165dff;
+      --accent-soft: #eaf1ff;
+      --good: #17653a;
+      --bad: #a62222;
+      --shadow: 0 18px 40px rgba(38, 31, 19, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(22, 93, 255, 0.08), transparent 26%),
+        radial-gradient(circle at bottom right, rgba(217, 124, 65, 0.12), transparent 28%),
+        linear-gradient(180deg, #f7f3eb 0%, #f2ede2 100%);
+      min-height: 100vh;
+    }
+    .shell {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 28px auto;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 22px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+    h1, h2, h3 { margin: 0; font-weight: 700; }
+    h1 { font-size: 30px; letter-spacing: -0.02em; }
+    h2 { font-size: 17px; margin-bottom: 16px; }
+    .lede {
+      margin-top: 10px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .form-grid {
+      display: grid;
+      gap: 14px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+    input::placeholder { color: #9a907f; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      appearance: none;
+      border: none;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .primary {
+      color: #fff;
+      background: linear-gradient(135deg, #165dff, #0d3fb3);
+    }
+    .secondary {
+      color: var(--ink);
+      background: #efe7d9;
+    }
+    .platforms {
+      margin-top: 18px;
+      display: grid;
+      gap: 10px;
+      max-height: 260px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .platform {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+      line-height: 1.45;
+    }
+    .status-card {
+      display: grid;
+      gap: 18px;
+    }
+    .progress-wrap {
+      border-radius: 999px;
+      overflow: hidden;
+      background: #eadfcd;
+      height: 14px;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #165dff, #4d87ff);
+      transition: width 180ms linear;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: #fff;
+    }
+    .stat .label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .stat .value {
+      font-size: 16px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+    .results, .commands {
+      display: grid;
+      gap: 10px;
+    }
+    .result-item, .command-item {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      padding: 12px 14px;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+    .ok { color: var(--good); }
+    .err { color: var(--bad); }
+    @media (max-width: 960px) {
+      .shell { grid-template-columns: 1fr; }
+      .row, .stat-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="panel">
+      <h1>dia GUI</h1>
+      <p class="lede">Same binary, local-only web UI. The browser drives the existing export engine; the server listens on <code>127.0.0.1</code> only.</p>
+      <div class="badge">CLI + Wizard + GUI</div>
+
+      <div class="form-grid" style="margin-top: 18px;">
+        <label>
+          Image
+          <input id="image" type="text" placeholder="apkdv/siyuan-unlock:v3.5.10">
+        </label>
+        <label>
+          Output
+          <input id="output" type="text" placeholder="apkdv_siyuan-unlock_v3.5.10.tar">
+        </label>
+        <label>
+          Proxy
+          <input id="proxy" type="text" placeholder="socks5://127.0.0.1:7897 / socks5h://127.0.0.1:7897 / http://127.0.0.1:7890">
+        </label>
+        <div class="row">
+          <label>
+            Username
+            <input id="username" type="text" placeholder="optional">
+          </label>
+          <label>
+            Password
+            <input id="password" type="password" placeholder="optional">
+            <span id="savedPasswordWrap" class="hint" style="display:none;">
+              <label style="display:flex; grid-template-columns:none; align-items:center; gap:8px; color:var(--muted);">
+                <input id="useSavedPassword" type="checkbox">
+                <span>Use configured password</span>
+              </label>
+            </span>
+          </label>
+        </div>
+        <label>
+          <span><input id="insecure" type="checkbox"> Insecure TLS</span>
+        </label>
+      </div>
+
+      <div class="controls">
+        <button class="secondary" id="inspect">Inspect Architectures</button>
+        <button class="primary" id="export">Export Selected</button>
+      </div>
+      <p class="hint">`socks5://` uses local DNS. `socks5h://` leaves DNS resolution to the proxy. Use `http://` for HTTP/HTTPS proxy ports.</p>
+
+      <div id="platforms" class="platforms"></div>
+    </section>
+
+    <section class="panel status-card">
+      <div>
+        <h2>Task Status</h2>
+        <div id="summary" class="lede">No task started.</div>
+      </div>
+      <div class="progress-wrap">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat">
+          <span class="label">Stage</span>
+          <span id="stage" class="value">idle</span>
+        </div>
+        <div class="stat">
+          <span class="label">Platform</span>
+          <span id="platform" class="value">-</span>
+        </div>
+        <div class="stat">
+          <span class="label">Layer</span>
+          <span id="layer" class="value">-</span>
+        </div>
+        <div class="stat">
+          <span class="label">Speed / ETA</span>
+          <span id="rate" class="value">-</span>
+        </div>
+      </div>
+      <div class="results">
+        <h3>Outputs</h3>
+        <div id="outputs"></div>
+      </div>
+      <div class="commands">
+        <h3>Manual Docker Load</h3>
+        <div id="commands"></div>
+      </div>
+      <div>
+        <h3>Errors</h3>
+        <div id="error" class="result-item"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const bootstrap = JSON.parse('__DIA_BOOTSTRAP_JSON__');
+    const imageInput = document.getElementById('image');
+    const outputInput = document.getElementById('output');
+    const proxyInput = document.getElementById('proxy');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const savedPasswordWrap = document.getElementById('savedPasswordWrap');
+    const useSavedPasswordInput = document.getElementById('useSavedPassword');
+    const insecureInput = document.getElementById('insecure');
+    const platformsEl = document.getElementById('platforms');
+    const summaryEl = document.getElementById('summary');
+    const stageEl = document.getElementById('stage');
+    const platformEl = document.getElementById('platform');
+    const layerEl = document.getElementById('layer');
+    const rateEl = document.getElementById('rate');
+    const outputsEl = document.getElementById('outputs');
+    const commandsEl = document.getElementById('commands');
+    const errorEl = document.getElementById('error');
+    const progressBarEl = document.getElementById('progressBar');
+
+    let inspectedPlatforms = [];
+    let currentTaskStream = null;
+    let lastInspectKey = '';
+    let lastDefaultOutput = bootstrap.output_explicit ? '' : (bootstrap.output || '');
+    imageInput.value = bootstrap.image || 'alpine:latest';
+    outputInput.value = bootstrap.output || '';
+    proxyInput.value = bootstrap.proxy || '';
+    usernameInput.value = bootstrap.username || '';
+    passwordInput.value = bootstrap.password || '';
+    insecureInput.checked = Boolean(bootstrap.insecure);
+    savedPasswordWrap.style.display = bootstrap.has_saved_password ? 'block' : 'none';
+    useSavedPasswordInput.checked = Boolean(bootstrap.has_saved_password);
+
+    function payload() {
+      return {
+        image: imageInput.value.trim(),
+        output: outputInput.value.trim(),
+        proxy: proxyInput.value.trim(),
+        username: usernameInput.value.trim(),
+        password: passwordInput.value,
+        use_saved_password: useSavedPasswordInput.checked && !passwordInput.value.trim(),
+        insecure: insecureInput.checked
+      };
+    }
+
+    function inspectKey() {
+      const current = payload();
+      return JSON.stringify({
+        image: current.image,
+        proxy: current.proxy,
+        username: current.username,
+        password: current.password,
+        use_saved_password: current.use_saved_password,
+        insecure: current.insecure
+      });
+    }
+
+    passwordInput.addEventListener('input', () => {
+      if (passwordInput.value.trim() !== '') {
+        useSavedPasswordInput.checked = false;
+      }
+    });
+
+    function formatBytes(size) {
+      if (!size) return '0 B';
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let value = size;
+      let idx = 0;
+      while (value >= 1024 && idx < units.length - 1) {
+        value /= 1024;
+        idx += 1;
+      }
+      return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+    }
+
+    function renderPlatforms(list) {
+      renderPlatformsWithSelection(list, null);
+    }
+
+    function platformKey(platform) {
+      return platform.manifest_ref || [platform.os || '', platform.architecture || '', platform.variant || ''].join('/');
+    }
+
+    function renderPlatformsWithSelection(list, selectedKeys) {
+      inspectedPlatforms = list;
+      platformsEl.innerHTML = '';
+      const hasSelectionMatch = selectedKeys && selectedKeys.size > 0
+        ? list.some((platform) => selectedKeys.has(platformKey(platform)))
+        : false;
+      list.forEach((platform) => {
+        const item = document.createElement('label');
+        item.className = 'platform';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.manifestRef = platform.manifest_ref || '';
+        checkbox.checked = hasSelectionMatch ? selectedKeys.has(platformKey(platform)) : true;
+
+        const text = document.createElement('span');
+        text.textContent = `${platform.display_index}. ${platform.label}`;
+
+        item.appendChild(checkbox);
+        item.appendChild(text);
+        platformsEl.appendChild(item);
+      });
+    }
+
+    function selectedPlatforms() {
+      return Array.from(platformsEl.querySelectorAll('input[type="checkbox"]:checked'))
+        .map((node) => node.dataset.manifestRef || '')
+        .filter(Boolean);
+    }
+
+    async function inspect(selectedKeys = null) {
+      clearStatus();
+      const response = await fetch('/api/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload())
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'inspect failed');
+      }
+      const currentOutput = outputInput.value.trim();
+      if (!currentOutput || (lastDefaultOutput && currentOutput === lastDefaultOutput)) {
+        outputInput.value = data.default_output;
+      }
+      lastDefaultOutput = data.default_output;
+      renderPlatformsWithSelection(data.platforms, selectedKeys);
+      lastInspectKey = inspectKey();
+      summaryEl.textContent = `Loaded ${data.platforms.length} platform(s) for ${data.image}.`;
+    }
+
+    async function startExport() {
+      if (!inspectedPlatforms.length || lastInspectKey !== inspectKey()) {
+        let preservedSelection = null;
+        if (inspectedPlatforms.length) {
+          preservedSelection = new Set(
+            selectedPlatforms()
+              .map((manifestRef) => inspectedPlatforms.find((platform) => platform.manifest_ref === manifestRef))
+              .filter(Boolean)
+              .map((platform) => platformKey(platform))
+          );
+        }
+        await inspect(preservedSelection);
+      }
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload(),
+          selected: selectedPlatforms()
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'export failed');
+      }
+      subscribeTask(data.task_id);
+    }
+
+    function subscribeTask(taskId) {
+      if (currentTaskStream) {
+        currentTaskStream.close();
+      }
+      clearStatus();
+      summaryEl.textContent = `Task ${taskId} running.`;
+      currentTaskStream = new EventSource(`/api/tasks/${taskId}/events`);
+      currentTaskStream.onmessage = (event) => {
+        renderTask(JSON.parse(event.data));
+      };
+      currentTaskStream.onerror = () => {
+        summaryEl.textContent = 'Task event stream disconnected. Use refresh if needed.';
+      };
+    }
+
+    function renderTask(task) {
+      const total = task.bytes_total || 0;
+      const done = task.bytes_done || 0;
+      const percent = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+      progressBarEl.style.width = `${percent}%`;
+      summaryEl.className = `lede ${task.status === 'failed' ? 'err' : task.status === 'done' ? 'ok' : ''}`;
+      summaryEl.textContent = `${task.status || 'running'}${task.message ? ` ${task.message}` : ''}`;
+      stageEl.textContent = task.stage || '-';
+      platformEl.textContent = task.platform || '-';
+      layerEl.textContent = task.current_layer ? `${task.current_layer}/${task.total_layers}` : '-';
+      rateEl.textContent = task.speed_bps ? `${formatBytes(task.speed_bps)}/s${task.eta_seconds ? `, ETA ${task.eta_seconds}s` : ''}` : '-';
+
+      outputsEl.innerHTML = '';
+      (task.output_files || []).forEach((file) => {
+        const item = document.createElement('div');
+        item.className = 'result-item';
+        item.textContent = file;
+        outputsEl.appendChild(item);
+      });
+      if (task.platform_index_path) {
+        const item = document.createElement('div');
+        item.className = 'result-item';
+        item.textContent = `Index: ${task.platform_index_path}`;
+        outputsEl.appendChild(item);
+      }
+
+      commandsEl.innerHTML = '';
+      (task.docker_load_commands || []).forEach((cmd) => {
+        const item = document.createElement('div');
+        item.className = 'command-item';
+        const pre = document.createElement('pre');
+        pre.textContent = cmd;
+        item.appendChild(pre);
+        commandsEl.appendChild(item);
+      });
+
+      errorEl.textContent = task.error || '-';
+      errorEl.className = `result-item ${task.error ? 'err' : ''}`;
+    }
+
+    function clearStatus() {
+      progressBarEl.style.width = '0%';
+      summaryEl.className = 'lede';
+      stageEl.textContent = 'idle';
+      platformEl.textContent = '-';
+      layerEl.textContent = '-';
+      rateEl.textContent = '-';
+      outputsEl.innerHTML = '';
+      commandsEl.innerHTML = '';
+      errorEl.textContent = '-';
+      errorEl.className = 'result-item';
+    }
+
+    document.getElementById('inspect').addEventListener('click', async () => {
+      try {
+        await inspect();
+      } catch (error) {
+        summaryEl.textContent = error.message;
+        errorEl.textContent = error.message;
+      }
+    });
+
+    document.getElementById('export').addEventListener('click', async () => {
+      try {
+        await startExport();
+      } catch (error) {
+        summaryEl.textContent = error.message;
+        errorEl.textContent = error.message;
+      }
+    });
+  </script>
+</body>
+</html>

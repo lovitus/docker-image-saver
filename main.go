@@ -12,14 +12,16 @@ import (
 var version = "dev"
 
 type cliOptions struct {
-	Image    string
-	Output   string
-	Proxy    string
-	Arch     string
-	Username string
-	Password string
-	Insecure bool
-	Version  bool
+	Image     string
+	Output    string
+	Proxy     string
+	Arch      string
+	Username  string
+	Password  string
+	Insecure  bool
+	GUI       bool
+	NoBrowser bool
+	Version   bool
 }
 
 func main() {
@@ -37,14 +39,36 @@ func main() {
 		}
 		return
 	}
+	forceGUI := isGUICommand(os.Args[1:])
 
 	opts, err := parseCLI(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
+	if forceGUI {
+		opts.GUI = true
+	}
 	if opts.Version {
 		fmt.Println(version)
+		return
+	}
+	if opts.GUI {
+		guiOpts := guiOptions{
+			Image:     opts.Image,
+			Output:    opts.Output,
+			Proxy:     opts.Proxy,
+			Username:  opts.Username,
+			Password:  opts.Password,
+			Insecure:  opts.Insecure,
+			NoBrowser: opts.NoBrowser,
+			Stdout:    os.Stdout,
+			Stderr:    os.Stderr,
+		}
+		if err := runGUI(version, guiOpts); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -80,8 +104,9 @@ func main() {
 
 func parseCLI(args []string) (cliOptions, error) {
 	var opts cliOptions
+	guiSubcommand := len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "gui")
 	args = normalizeCLIArgs(args)
-	args = reorderArgsForFlagSet(args)
+	args = reorderArgsForFlagSet(args, guiSubcommand)
 
 	fs := flag.NewFlagSet("dia", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -92,6 +117,8 @@ func parseCLI(args []string) (cliOptions, error) {
 	fs.StringVar(&opts.Username, "username", "", "registry username")
 	fs.StringVar(&opts.Password, "password", "", "registry password")
 	fs.BoolVar(&opts.Insecure, "insecure", false, "skip TLS verification")
+	fs.BoolVar(&opts.GUI, "gui", false, "launch the local web GUI")
+	fs.BoolVar(&opts.NoBrowser, "no-browser", false, "do not auto-open a browser in GUI mode")
 	fs.BoolVar(&opts.Version, "version", false, "print version")
 
 	if err := fs.Parse(args); err != nil {
@@ -138,7 +165,22 @@ func isWizardCommand(args []string) bool {
 	return cmd == "wizard" || cmd == "interactive"
 }
 
-func reorderArgsForFlagSet(args []string) []string {
+func isGUICommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(args[0]), "gui") {
+		return true
+	}
+	for _, arg := range args {
+		if strings.TrimSpace(arg) == "--gui" {
+			return true
+		}
+	}
+	return false
+}
+
+func reorderArgsForFlagSet(args []string, guiSubcommand bool) []string {
 	if len(args) == 0 {
 		return args
 	}
@@ -156,6 +198,9 @@ func reorderArgsForFlagSet(args []string) []string {
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
 		if arg == "" {
+			continue
+		}
+		if guiSubcommand && len(flags) == 0 && len(positional) == 0 && strings.EqualFold(arg, "gui") {
 			continue
 		}
 		if arg == "--" {

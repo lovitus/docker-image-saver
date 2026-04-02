@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
@@ -235,15 +239,44 @@ func (c *registryClient) getManifest(ref imageRef, manifestRef string) ([]byte, 
 	}
 	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", ref.RegistryHost(), ref.Repository, manifestRef)
 	accept := strings.Join([]string{mtDockerManifestListV2, mtOCIImageIndexV1, mtDockerManifestV2, mtOCIManifestV1}, ", ")
+	body, contentType, resp, err := c.fetch(ref, url, accept)
+	if err != nil {
+		return nil, "", err
+	}
+	expectedDigest := strings.TrimSpace(resp.Header.Get("Docker-Content-Digest"))
+	if isDigestReference(manifestRef) {
+		expectedDigest = manifestRef
+	}
+	if expectedDigest != "" {
+		if err := verifyPayloadDigest(body, expectedDigest, "manifest"); err != nil {
+			return nil, "", err
+		}
+	}
+	return body, contentType, nil
+}
+
+func (c *registryClient) getManifestDescriptor(ref imageRef, desc descriptor) ([]byte, string, error) {
+	if strings.TrimSpace(desc.Digest) == "" {
+		return nil, "", fmt.Errorf("manifest descriptor missing digest")
+	}
+	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", ref.RegistryHost(), ref.Repository, desc.Digest)
+	accept := strings.Join([]string{mtDockerManifestListV2, mtOCIImageIndexV1, mtDockerManifestV2, mtOCIManifestV1}, ", ")
 	body, contentType, _, err := c.fetch(ref, url, accept)
 	if err != nil {
+		return nil, "", err
+	}
+	if err := verifyPayloadDescriptor(body, desc, "manifest"); err != nil {
 		return nil, "", err
 	}
 	return body, contentType, nil
 }
 
 func (c *registryClient) getBlob(ref imageRef, digest string) ([]byte, string, error) {
-	rc, contentType, err := c.openBlob(ref, digest)
+	return c.getBlobDescriptor(ref, descriptor{Digest: digest})
+}
+
+func (c *registryClient) getBlobDescriptor(ref imageRef, desc descriptor) ([]byte, string, error) {
+	rc, contentType, err := c.openBlobDescriptor(ref, desc)
 	if err != nil {
 		return nil, "", err
 	}
@@ -256,12 +289,25 @@ func (c *registryClient) getBlob(ref imageRef, digest string) ([]byte, string, e
 }
 
 func (c *registryClient) openBlob(ref imageRef, digest string) (io.ReadCloser, string, error) {
+	return c.openBlobDescriptor(ref, descriptor{Digest: digest})
+}
+
+func (c *registryClient) openBlobDescriptor(ref imageRef, desc descriptor) (io.ReadCloser, string, error) {
+	digest := strings.TrimSpace(desc.Digest)
+	if digest == "" {
+		return nil, "", fmt.Errorf("blob descriptor missing digest")
+	}
 	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", ref.RegistryHost(), ref.Repository, digest)
 	_, contentType, resp, err := c.fetch(ref, url, "")
 	if err != nil {
 		return nil, "", err
 	}
-	return resp.Body, contentType, nil
+	body, err := newVerifyingReadCloser(resp.Body, desc, "blob")
+	if err != nil {
+		_ = resp.Body.Close()
+		return nil, "", err
+	}
+	return body, contentType, nil
 }
 
 func (c *registryClient) fetch(ref imageRef, rawURL, accept string) ([]byte, string, *http.Response, error) {
@@ -443,4 +489,128 @@ func parseAuthChallenge(header string) (string, map[string]string) {
 		params[strings.ToLower(key)] = value
 	}
 	return scheme, params
+}
+
+type verifyingReadCloser struct {
+	rc         io.ReadCloser
+	label      string
+	wantDigest string
+	wantSize   int64
+	hasher     hash.Hash
+	bytesRead  int64
+	verified   bool
+}
+
+func newVerifyingReadCloser(rc io.ReadCloser, desc descriptor, label string) (io.ReadCloser, error) {
+	var hasher hash.Hash
+	digest := strings.TrimSpace(desc.Digest)
+	if digest != "" {
+		var err error
+		hasher, _, err = newDigestHasher(digest)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &verifyingReadCloser{
+		rc:         rc,
+		label:      label,
+		wantDigest: digest,
+		wantSize:   desc.Size,
+		hasher:     hasher,
+	}, nil
+}
+
+func (r *verifyingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	if n > 0 {
+		r.bytesRead += int64(n)
+		if r.hasher != nil {
+			_, _ = r.hasher.Write(p[:n])
+		}
+	}
+	if err == io.EOF {
+		if verifyErr := r.verify(); verifyErr != nil {
+			return n, verifyErr
+		}
+	}
+	return n, err
+}
+
+func (r *verifyingReadCloser) Close() error {
+	return r.rc.Close()
+}
+
+func (r *verifyingReadCloser) verify() error {
+	if r.verified {
+		return nil
+	}
+	r.verified = true
+	if r.wantSize > 0 && r.bytesRead != r.wantSize {
+		return fmt.Errorf("%s size mismatch: got %d want %d", r.label, r.bytesRead, r.wantSize)
+	}
+	if r.wantDigest != "" && r.hasher != nil {
+		got := r.digestString()
+		if !strings.EqualFold(got, r.wantDigest) {
+			return fmt.Errorf("%s digest mismatch: got %s want %s", r.label, got, r.wantDigest)
+		}
+	}
+	return nil
+}
+
+func (r *verifyingReadCloser) digestString() string {
+	if r.wantDigest == "" || r.hasher == nil {
+		return ""
+	}
+	parts := strings.SplitN(r.wantDigest, ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return parts[0] + ":" + hex.EncodeToString(r.hasher.Sum(nil))
+}
+
+func verifyPayloadDescriptor(data []byte, desc descriptor, label string) error {
+	if desc.Size > 0 && int64(len(data)) != desc.Size {
+		return fmt.Errorf("%s size mismatch: got %d want %d", label, len(data), desc.Size)
+	}
+	return verifyPayloadDigest(data, desc.Digest, label)
+}
+
+func verifyPayloadDigest(data []byte, digest, label string) error {
+	digest = strings.TrimSpace(digest)
+	if digest == "" {
+		return nil
+	}
+	hasher, algo, err := newDigestHasher(digest)
+	if err != nil {
+		return err
+	}
+	_, _ = hasher.Write(data)
+	got := algo + ":" + hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(got, digest) {
+		return fmt.Errorf("%s digest mismatch: got %s want %s", label, got, digest)
+	}
+	return nil
+}
+
+func newDigestHasher(digest string) (hash.Hash, string, error) {
+	parts := strings.SplitN(strings.TrimSpace(digest), ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, "", fmt.Errorf("invalid digest %q", digest)
+	}
+	algo := strings.ToLower(parts[0])
+	switch algo {
+	case "sha256":
+		return sha256.New(), algo, nil
+	case "sha384":
+		return sha512.New384(), algo, nil
+	case "sha512":
+		return sha512.New(), algo, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported digest algorithm %q", parts[0])
+	}
+}
+
+func isDigestReference(value string) bool {
+	parts := strings.SplitN(strings.TrimSpace(value), ":", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
