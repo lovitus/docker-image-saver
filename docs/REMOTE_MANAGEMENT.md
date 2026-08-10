@@ -56,6 +56,8 @@ The Sync page remembers one default execution machine. Selecting another machine
 
 Only one synchronization task may run on a given execution machine from one GUI process at a time. This prevents overlapping jobs from competing for the same generated archive paths.
 
+The task rail lists all jobs still retained by the GUI process. Refreshing the browser reconnects to the newest running job, and the picker can switch between concurrent jobs on different execution machines. Terminal jobs remain available for 10 minutes; this history is intentionally memory-only.
+
 ## 4. Save an image list
 
 Each non-comment line is either:

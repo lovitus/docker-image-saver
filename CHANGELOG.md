@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- Added a recent-task picker and automatic reconnection to running GUI jobs after browser refresh.
+- Added URL-hash page restoration and direct browsing actions for remote storage candidates.
+
+### Changed
+
+- Sync, local export, image-list, and connection-setting save controls now reject duplicate submissions while requests are pending.
+
+### Fixed
+
+- Canceling a GUI confirmation dialog with Escape now resolves the pending operation instead of leaving it suspended.
+- Stale task, Harbor browse, remote-file, and storage-probe responses can no longer overwrite a newer GUI selection.
+- Task-store proxy redaction is now enforced at the storage boundary.
+
 ## v1.3.0 - 2026-08-10
 
 ### Added

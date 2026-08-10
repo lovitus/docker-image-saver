@@ -56,6 +56,9 @@ The same GUI contains:
 - direct or SSH-routed Harbor management with an explicit access-path selector
 - remote archive browsing and explicit on-demand download/drag-out
 - the original single-image local exporter
+- an in-process recent-task picker that reconnects running jobs after a browser refresh
+
+The current page is preserved in the URL hash. Running tasks remain discoverable after a browser refresh, and completed/failed/canceled tasks remain available in the picker for 10 minutes. Task history is memory-only: restarting `dia gui` clears it and never writes task inputs or credentials to disk.
 
 See [Remote management](docs/REMOTE_MANAGEMENT.md) and [Security model](docs/SECURITY.md).
 

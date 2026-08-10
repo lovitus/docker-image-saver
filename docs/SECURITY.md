@@ -17,6 +17,8 @@ At startup, `dia` creates a random 256-bit token. The launch URL exchanges it fo
 
 Responses include a restrictive local Content Security Policy, no-referrer, no-store, frame denial, and MIME sniffing protection. The server has no public-listen option.
 
+The recent-task API is protected by the same session boundary. It exposes only in-memory, redacted task snapshots; terminal snapshots are removed after 10 minutes and are never persisted.
+
 ## Saved secrets
 
 Passwords and SSH passphrases are stored in an AES-256-GCM envelope separate from metadata. A random master key is written with user-only permissions where the OS supports them, or can be supplied via `DIA_CONFIG_KEY`.

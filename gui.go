@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -232,6 +233,7 @@ func (s *guiServer) routes() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/inspect", s.handleInspect)
 	mux.HandleFunc("/api/export", s.handleExport)
+	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTask)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/settings/", s.handleSettingsResource)
@@ -346,6 +348,7 @@ func (s *guiServer) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task, err := s.taskStore.newTaskWithOutputs(guiTaskInput{
+		Kind:             "export",
 		Image:            req.Image,
 		Output:           req.Output,
 		Proxy:            proxyURLDisplay(req.Proxy),
@@ -403,6 +406,18 @@ func (s *guiServer) applyStartupProxyCredentials(requestProxy string, useSaved b
 		return strings.TrimSpace(s.options.Proxy)
 	}
 	return requestProxy
+}
+
+func (s *guiServer) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/api/tasks" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.taskStore.snapshots())
 }
 
 func (s *guiServer) handleTask(w http.ResponseWriter, r *http.Request) {
@@ -654,6 +669,7 @@ func (s *guiTaskStore) newRemoteTask(input guiTaskInput, remoteID string) (*guiT
 	if remoteID == "" {
 		return nil, fmt.Errorf("execution machine is required")
 	}
+	input = sanitizeGUITaskInput(input)
 	id := newConfigID("task")
 	task := &guiTask{
 		snapshotValue: guiTaskSnapshot{
@@ -680,6 +696,7 @@ func (s *guiTaskStore) newTask(input guiTaskInput) (*guiTask, error) {
 }
 
 func (s *guiTaskStore) newTaskWithOutputs(input guiTaskInput, outputs []string) (*guiTask, error) {
+	input = sanitizeGUITaskInput(input)
 	id := newConfigID("task")
 	outputKeys, err := normalizeOutputReservationKeys(outputs)
 	if err != nil {
@@ -710,6 +727,12 @@ func (s *guiTaskStore) newTaskWithOutputs(input guiTaskInput, outputs []string) 
 	s.mu.Unlock()
 	task.publish()
 	return task, nil
+}
+
+func sanitizeGUITaskInput(input guiTaskInput) guiTaskInput {
+	input.Proxy = proxyURLDisplay(input.Proxy)
+	input.Selected = append([]string(nil), input.Selected...)
+	return input
 }
 
 func normalizeOutputReservationKey(output string) (string, error) {
@@ -908,6 +931,27 @@ func (s *guiTaskStore) get(id string) *guiTask {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.tasks[id]
+}
+
+func (s *guiTaskStore) snapshots() []guiTaskSnapshot {
+	s.mu.RLock()
+	tasks := make([]*guiTask, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		tasks = append(tasks, task)
+	}
+	s.mu.RUnlock()
+
+	snapshots := make([]guiTaskSnapshot, 0, len(tasks))
+	for _, task := range tasks {
+		snapshots = append(snapshots, task.snapshot())
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].UpdatedAt.Equal(snapshots[j].UpdatedAt) {
+			return snapshots[i].ID > snapshots[j].ID
+		}
+		return snapshots[i].UpdatedAt.After(snapshots[j].UpdatedAt)
+	})
+	return snapshots
 }
 
 func (s *guiTaskStore) remove(id string, task *guiTask) {

@@ -6,6 +6,8 @@ GUI 只监听随机的 `127.0.0.1` 端口，不提供公网监听选项。启动
 
 响应设置 CSP、`no-referrer`、`no-store`、禁止 frame 和 MIME sniffing。
 
+“最近任务”API 使用相同的会话边界，只返回内存中的脱敏任务快照；终态快照在 10 分钟后删除，且从不持久化。
+
 ## 密码
 
 Registry 密码、token、SSH 密码和私钥口令使用 AES-256-GCM 保存到独立 `secrets.enc`。浏览器只得到 `has_secret` 标志。密码不会写入 HTML bootstrap、设置 API、任务/SSE、平台索引、skopeo 命令行或日志。

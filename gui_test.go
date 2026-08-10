@@ -233,6 +233,9 @@ verify:
 	if !sawWriteLayer {
 		t.Fatal("did not observe write_layer progress update")
 	}
+	if done.Input.Kind != "export" {
+		t.Fatalf("unexpected task kind: %q", done.Input.Kind)
+	}
 	if done.PlatformIndexPath != "/tmp/alpine_platforms.json" {
 		t.Fatalf("unexpected platform index path: %q", done.PlatformIndexPath)
 	}
@@ -695,6 +698,64 @@ func TestGUITaskStoreEvictsCompletedTaskAfterRetention(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for completed task eviction")
+}
+
+func TestGUITasksListsNewestFirstWithoutProxyCredentials(t *testing.T) {
+	server := newGUIServer("test", guiOptions{})
+	outputDir := t.TempDir()
+	first, err := server.taskStore.newTask(guiTaskInput{
+		Kind:     "export",
+		Image:    "first.example/app:v1",
+		Output:   filepath.Join(outputDir, "first.tar"),
+		Proxy:    "socks5h://proxy-user:proxy-password@127.0.0.1:7897",
+		Selected: []string{"sha256:first"},
+	})
+	if err != nil {
+		t.Fatalf("new first task: %v", err)
+	}
+	second, err := server.taskStore.newRemoteTask(guiTaskInput{Kind: "sync", RemoteID: "remote-1"}, "remote-1")
+	if err != nil {
+		t.Fatalf("new second task: %v", err)
+	}
+
+	now := time.Now().UTC()
+	first.mu.Lock()
+	first.snapshotValue.UpdatedAt = now.Add(-time.Minute)
+	first.mu.Unlock()
+	second.mu.Lock()
+	second.snapshotValue.UpdatedAt = now
+	second.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	rec := httptest.NewRecorder()
+	server.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "proxy-user") || strings.Contains(rec.Body.String(), "proxy-password") {
+		t.Fatal("task list leaked proxy credentials")
+	}
+
+	var snapshots []guiTaskSnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snapshots); err != nil {
+		t.Fatalf("decode task list: %v", err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("unexpected task count: %d", len(snapshots))
+	}
+	if snapshots[0].ID != second.snapshot().ID || snapshots[1].ID != first.snapshot().ID {
+		t.Fatalf("tasks are not newest first: %+v", snapshots)
+	}
+	if snapshots[1].Input.Proxy != "socks5h://127.0.0.1:7897" {
+		t.Fatalf("unexpected redacted proxy: %q", snapshots[1].Input.Proxy)
+	}
+
+	methodReq := httptest.NewRequest(http.MethodPost, "/api/tasks", nil)
+	methodRec := httptest.NewRecorder()
+	server.routes().ServeHTTP(methodRec, methodReq)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("unexpected mutation status: %d", methodRec.Code)
+	}
 }
 
 func TestGUIExportRejectsDerivedOutputConflict(t *testing.T) {
