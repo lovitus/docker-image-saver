@@ -196,7 +196,9 @@ No root access or APK packaging is required.
 
 ## Development gate
 
-Local work is limited to source inspection and syntax/format checks. Unit tests, integration tests, race detection, `go vet`, cross-compilation, packaging, checksums, and release publication run only in GitHub Actions. Every change reaches `main` through a pull request after the required `quality` and `cross-build` checks pass.
+Local work is limited to source inspection and syntax/format checks. Unit tests, race detection, `go vet`, cross-compilation, packaging, checksums, and release publication run only in GitHub Actions. Every change reaches `main` through a pull request after the required `quality` and `cross-build` checks pass.
+
+Live SSH, Registry, Harbor, remote-storage, proxy, and `docker load` checks run in isolated directories on maintainer-approved private validation hosts. The workstation only orchestrates those checks over SSH; private endpoints and credentials are never placed in GitHub Actions or committed to the repository. These live checks supplement rather than replace the required GitHub CI jobs.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the mandatory repository policy in [AGENTS.md](AGENTS.md).
 
