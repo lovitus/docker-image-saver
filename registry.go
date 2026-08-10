@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/http/httpproxy"
 	xproxy "golang.org/x/net/proxy"
 )
 
@@ -37,6 +38,9 @@ const (
 	mtDockerForeignLayer    = "application/vnd.docker.image.rootfs.foreign.diff.tar"
 	defaultHTTPTimeout      = 5 * time.Minute
 	defaultTokenHTTPTimeout = 1 * time.Minute
+	maxManifestResponseSize = 32 << 20
+	maxConfigBlobSize       = 64 << 20
+	maxTokenResponseSize    = 1 << 20
 )
 
 type descriptor struct {
@@ -84,6 +88,8 @@ func (p platform) String() string {
 
 type registryClient struct {
 	httpClient *http.Client
+	scheme     string
+	ctx        context.Context
 	username   string
 	password   string
 	tokensMu   sync.Mutex
@@ -91,16 +97,36 @@ type registryClient struct {
 }
 
 func newRegistryClient(proxyOpt, username, password string, insecure bool) (*registryClient, error) {
+	return newRegistryClientWithScheme(context.Background(), proxyOpt, username, password, insecure, "https")
+}
+
+func newRegistryClientWithScheme(ctx context.Context, proxyOpt, username, password string, insecure bool, scheme string) (*registryClient, error) {
 	httpClient, err := newHTTPClient(proxyOpt, insecure)
 	if err != nil {
 		return nil, err
 	}
+	scheme = strings.ToLower(strings.TrimSpace(scheme))
+	if scheme == "" {
+		scheme = "https"
+	}
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("unsupported registry scheme %q", scheme)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &registryClient{
 		httpClient: httpClient,
+		scheme:     scheme,
+		ctx:        ctx,
 		username:   username,
 		password:   password,
 		tokens:     make(map[string]string),
 	}, nil
+}
+
+func (c *registryClient) endpointURL(ref imageRef, suffix string) string {
+	return fmt.Sprintf("%s://%s/v2/%s/%s", c.scheme, ref.RegistryHost(), ref.Repository, strings.TrimPrefix(suffix, "/"))
 }
 
 func newHTTPClient(proxyOpt string, insecure bool) (*http.Client, error) {
@@ -125,12 +151,15 @@ func newHTTPClient(proxyOpt string, insecure bool) (*http.Client, error) {
 
 	proxyAddr := strings.TrimSpace(proxyOpt)
 	if proxyAddr == "" {
-		proxyAddr = firstProxyEnv()
+		proxyFunc := environmentProxyFunc()
+		transport.Proxy = func(req *http.Request) (*url.URL, error) {
+			return proxyFunc(req.URL)
+		}
 	}
 	if proxyAddr != "" {
-		u, err := url.Parse(proxyAddr)
+		u, err := parseExplicitProxyURL(proxyAddr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyAddr, err)
+			return nil, err
 		}
 		scheme := strings.ToLower(u.Scheme)
 		switch scheme {
@@ -139,16 +168,16 @@ func newHTTPClient(proxyOpt string, insecure bool) (*http.Client, error) {
 		case "socks5", "socks5h":
 			dialer, err := xproxy.FromURL(u, xproxy.Direct)
 			if err != nil {
-				return nil, fmt.Errorf("unable to use socks proxy %q: %w", proxyAddr, err)
+				return nil, fmt.Errorf("unable to use socks proxy %q: %w", proxyURLDisplay(proxyAddr), err)
 			}
 			transport.Proxy = nil
 			remoteDNS := scheme == "socks5h"
 			if contextDialer, ok := dialer.(xproxy.ContextDialer); ok {
-				transport.DialContext = socksDialContext(contextDialer.DialContext, proxyAddr, remoteDNS)
+				transport.DialContext = socksDialContext(contextDialer.DialContext, proxyURLDisplay(proxyAddr), remoteDNS)
 			} else {
 				transport.DialContext = socksDialContext(
 					func(ctx context.Context, network, addr string) (net.Conn, error) { return dialer.Dial(network, addr) },
-					proxyAddr,
+					proxyURLDisplay(proxyAddr),
 					remoteDNS,
 				)
 			}
@@ -158,6 +187,66 @@ func newHTTPClient(proxyOpt string, insecure bool) (*http.Client, error) {
 	}
 
 	return &http.Client{Timeout: defaultHTTPTimeout, Transport: transport}, nil
+}
+
+func parseExplicitProxyURL(proxyAddr string) (*url.URL, error) {
+	proxyAddr = strings.TrimSpace(proxyAddr)
+	display := proxyURLDisplay(proxyAddr)
+	u, err := url.Parse(proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", display, err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q (supported: http, https, socks5, socks5h)", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("proxy URL %q is missing a host", display)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return nil, fmt.Errorf("proxy URL %q must not contain a path", display)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("proxy URL %q must not contain a query or fragment", display)
+	}
+	return u, nil
+}
+
+func proxyURLWithoutCredentials(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw, false
+	}
+	u.User = nil
+	return u.String(), true
+}
+
+func proxyURLDisplay(raw string) string {
+	if display, hidden := proxyURLWithoutCredentials(raw); hidden {
+		return display
+	}
+	// Avoid echoing userinfo even when the rest of a malformed URL cannot be parsed.
+	if scheme := strings.Index(raw, "://"); scheme >= 0 {
+		authorityStart := scheme + 3
+		if at := strings.Index(raw[authorityStart:], "@"); at >= 0 {
+			return raw[:authorityStart] + raw[authorityStart+at+1:]
+		}
+	}
+	return raw
+}
+
+func environmentProxyFunc() func(*url.URL) (*url.URL, error) {
+	config := httpproxy.FromEnvironment()
+	allProxy := firstNonEmptyEnvironment("ALL_PROXY", "all_proxy")
+	if config.HTTPProxy == "" {
+		config.HTTPProxy = allProxy
+	}
+	if config.HTTPSProxy == "" {
+		config.HTTPSProxy = allProxy
+	}
+	return config.ProxyFunc()
 }
 
 func socksDialContext(
@@ -219,12 +308,7 @@ func resolveLocalTargetAddr(ctx context.Context, addr string) (string, error) {
 	return net.JoinHostPort(ips[0].String(), port), nil
 }
 
-func firstProxyEnv() string {
-	keys := []string{
-		"HTTPS_PROXY", "https_proxy",
-		"HTTP_PROXY", "http_proxy",
-		"ALL_PROXY", "all_proxy",
-	}
+func firstNonEmptyEnvironment(keys ...string) string {
 	for _, key := range keys {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			return value
@@ -234,14 +318,24 @@ func firstProxyEnv() string {
 }
 
 func (c *registryClient) getManifest(ref imageRef, manifestRef string) ([]byte, string, error) {
+	body, contentType, _, err := c.getManifestWithDigest(ref, manifestRef)
+	return body, contentType, err
+}
+
+func (c *registryClient) getManifestWithDigest(ref imageRef, manifestRef string) ([]byte, string, string, error) {
 	if manifestRef == "" {
 		manifestRef = ref.ManifestReference()
 	}
-	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", ref.RegistryHost(), ref.Repository, manifestRef)
+	if strings.Contains(manifestRef, ":") {
+		if _, _, err := newDigestHasher(manifestRef); err != nil {
+			return nil, "", "", fmt.Errorf("invalid manifest digest: %w", err)
+		}
+	}
+	url := c.endpointURL(ref, "manifests/"+manifestRef)
 	accept := strings.Join([]string{mtDockerManifestListV2, mtOCIImageIndexV1, mtDockerManifestV2, mtOCIManifestV1}, ", ")
 	body, contentType, resp, err := c.fetch(ref, url, accept)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	expectedDigest := strings.TrimSpace(resp.Header.Get("Docker-Content-Digest"))
 	if isDigestReference(manifestRef) {
@@ -249,17 +343,23 @@ func (c *registryClient) getManifest(ref imageRef, manifestRef string) ([]byte, 
 	}
 	if expectedDigest != "" {
 		if err := verifyPayloadDigest(body, expectedDigest, "manifest"); err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
+	} else {
+		sum := sha256.Sum256(body)
+		expectedDigest = "sha256:" + hex.EncodeToString(sum[:])
 	}
-	return body, contentType, nil
+	return body, contentType, expectedDigest, nil
 }
 
 func (c *registryClient) getManifestDescriptor(ref imageRef, desc descriptor) ([]byte, string, error) {
 	if strings.TrimSpace(desc.Digest) == "" {
 		return nil, "", fmt.Errorf("manifest descriptor missing digest")
 	}
-	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", ref.RegistryHost(), ref.Repository, desc.Digest)
+	if _, _, err := newDigestHasher(desc.Digest); err != nil {
+		return nil, "", fmt.Errorf("invalid manifest descriptor digest: %w", err)
+	}
+	url := c.endpointURL(ref, "manifests/"+desc.Digest)
 	accept := strings.Join([]string{mtDockerManifestListV2, mtOCIImageIndexV1, mtDockerManifestV2, mtOCIManifestV1}, ", ")
 	body, contentType, _, err := c.fetch(ref, url, accept)
 	if err != nil {
@@ -272,7 +372,7 @@ func (c *registryClient) getManifestDescriptor(ref imageRef, desc descriptor) ([
 }
 
 func (c *registryClient) getBlob(ref imageRef, digest string) ([]byte, string, error) {
-	return c.getBlobDescriptor(ref, descriptor{Digest: digest})
+	return c.getBlobDescriptor(ref, descriptor{Digest: digest, Size: -1})
 }
 
 func (c *registryClient) getBlobDescriptor(ref imageRef, desc descriptor) ([]byte, string, error) {
@@ -281,7 +381,7 @@ func (c *registryClient) getBlobDescriptor(ref imageRef, desc descriptor) ([]byt
 		return nil, "", err
 	}
 	defer rc.Close()
-	body, err := io.ReadAll(rc)
+	body, err := readAllLimited(rc, maxConfigBlobSize, "blob")
 	if err != nil {
 		return nil, "", err
 	}
@@ -289,7 +389,7 @@ func (c *registryClient) getBlobDescriptor(ref imageRef, desc descriptor) ([]byt
 }
 
 func (c *registryClient) openBlob(ref imageRef, digest string) (io.ReadCloser, string, error) {
-	return c.openBlobDescriptor(ref, descriptor{Digest: digest})
+	return c.openBlobDescriptor(ref, descriptor{Digest: digest, Size: -1})
 }
 
 func (c *registryClient) openBlobDescriptor(ref imageRef, desc descriptor) (io.ReadCloser, string, error) {
@@ -297,7 +397,10 @@ func (c *registryClient) openBlobDescriptor(ref imageRef, desc descriptor) (io.R
 	if digest == "" {
 		return nil, "", fmt.Errorf("blob descriptor missing digest")
 	}
-	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", ref.RegistryHost(), ref.Repository, digest)
+	if _, _, err := newDigestHasher(digest); err != nil {
+		return nil, "", fmt.Errorf("invalid blob descriptor digest: %w", err)
+	}
+	url := c.endpointURL(ref, "blobs/"+digest)
 	_, contentType, resp, err := c.fetch(ref, url, "")
 	if err != nil {
 		return nil, "", err
@@ -311,7 +414,7 @@ func (c *registryClient) openBlobDescriptor(ref imageRef, desc descriptor) (io.R
 }
 
 func (c *registryClient) fetch(ref imageRef, rawURL, accept string) ([]byte, string, *http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -336,7 +439,7 @@ func (c *registryClient) fetch(ref imageRef, rawURL, accept string) ([]byte, str
 	}
 
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, maxManifestResponseSize, "manifest response")
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -344,7 +447,15 @@ func (c *registryClient) fetch(ref imageRef, rawURL, accept string) ([]byte, str
 }
 
 func (c *registryClient) doWithAuth(ref imageRef, req *http.Request) (*http.Response, error) {
-	scope := fmt.Sprintf("repository:%s:pull", ref.Repository)
+	return c.doWithAuthActions(ref, req, "pull")
+}
+
+func (c *registryClient) doWithAuthActions(ref imageRef, req *http.Request, actions string) (*http.Response, error) {
+	actions = strings.Trim(strings.TrimSpace(actions), ",")
+	if actions == "" {
+		actions = "pull"
+	}
+	scope := fmt.Sprintf("repository:%s:%s", ref.Repository, actions)
 	if token := c.getToken(req.URL.Host, scope); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -369,15 +480,24 @@ func (c *registryClient) doWithAuth(ref imageRef, req *http.Request) (*http.Resp
 	if strings.ToLower(scheme) != "bearer" {
 		return resp, nil
 	}
+	_ = resp.Body.Close()
 
 	token, err := c.getOrFetchBearerToken(req.Context(), req.URL.Host, scope, params)
 	if err != nil {
 		return nil, err
 	}
-	_ = resp.Body.Close()
 
 	retry := req.Clone(req.Context())
 	retry.Header = req.Header.Clone()
+	if req.Body != nil {
+		if req.GetBody == nil {
+			return nil, fmt.Errorf("registry authentication challenge cannot replay request body")
+		}
+		retry.Body, err = req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("replay registry request body: %w", err)
+		}
+	}
 	retry.Header.Set("Authorization", "Bearer "+token)
 	if c.username != "" && c.password != "" {
 		retry.SetBasicAuth(c.username, c.password)
@@ -449,7 +569,11 @@ func (c *registryClient) getOrFetchBearerToken(ctx context.Context, host, scope 
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	data, err := readAllLimited(resp.Body, maxTokenResponseSize, "token response")
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
 		return "", fmt.Errorf("invalid token response: %w", err)
 	}
 	token := payload.Token
@@ -461,6 +585,17 @@ func (c *registryClient) getOrFetchBearerToken(ctx context.Context, host, scope 
 	}
 	c.storeToken(host, scope, token)
 	return token, nil
+}
+
+func readAllLimited(reader io.Reader, limit int64, label string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, limit)
+	}
+	return data, nil
 }
 
 func parseAuthChallenge(header string) (string, map[string]string) {
@@ -537,7 +672,18 @@ func (r *verifyingReadCloser) Read(p []byte) (int, error) {
 }
 
 func (r *verifyingReadCloser) Close() error {
-	return r.rc.Close()
+	var verifyErr error
+	if !r.verified {
+		// Compression readers can finish at their own end marker before they ask the
+		// HTTP body for EOF. Drain the descriptor stream so size and digest checks
+		// remain mandatory for compressed layers as well.
+		_, verifyErr = io.Copy(io.Discard, r)
+	}
+	closeErr := r.rc.Close()
+	if verifyErr != nil {
+		return verifyErr
+	}
+	return closeErr
 }
 
 func (r *verifyingReadCloser) verify() error {
@@ -545,7 +691,7 @@ func (r *verifyingReadCloser) verify() error {
 		return nil
 	}
 	r.verified = true
-	if r.wantSize > 0 && r.bytesRead != r.wantSize {
+	if r.wantSize >= 0 && r.bytesRead != r.wantSize {
 		return fmt.Errorf("%s size mismatch: got %d want %d", r.label, r.bytesRead, r.wantSize)
 	}
 	if r.wantDigest != "" && r.hasher != nil {
@@ -569,7 +715,7 @@ func (r *verifyingReadCloser) digestString() string {
 }
 
 func verifyPayloadDescriptor(data []byte, desc descriptor, label string) error {
-	if desc.Size > 0 && int64(len(data)) != desc.Size {
+	if desc.Size >= 0 && int64(len(data)) != desc.Size {
 		return fmt.Errorf("%s size mismatch: got %d want %d", label, len(data), desc.Size)
 	}
 	return verifyPayloadDigest(data, desc.Digest, label)
@@ -598,16 +744,24 @@ func newDigestHasher(digest string) (hash.Hash, string, error) {
 		return nil, "", fmt.Errorf("invalid digest %q", digest)
 	}
 	algo := strings.ToLower(parts[0])
+	var hasher hash.Hash
 	switch algo {
 	case "sha256":
-		return sha256.New(), algo, nil
+		hasher = sha256.New()
 	case "sha384":
-		return sha512.New384(), algo, nil
+		hasher = sha512.New384()
 	case "sha512":
-		return sha512.New(), algo, nil
+		hasher = sha512.New()
 	default:
 		return nil, "", fmt.Errorf("unsupported digest algorithm %q", parts[0])
 	}
+	if len(parts[1]) != hasher.Size()*2 {
+		return nil, "", fmt.Errorf("invalid %s digest length: got %d hex characters, want %d", parts[0], len(parts[1]), hasher.Size()*2)
+	}
+	if _, err := hex.DecodeString(parts[1]); err != nil {
+		return nil, "", fmt.Errorf("invalid digest %q: %w", digest, err)
+	}
+	return hasher, algo, nil
 }
 
 func isDigestReference(value string) bool {

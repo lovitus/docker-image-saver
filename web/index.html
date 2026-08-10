@@ -1,540 +1,754 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>dia GUI</title>
+  <title>dia control deck</title>
   <style>
     :root {
-      --bg: #f5f1e8;
-      --panel: #fffdf8;
-      --ink: #1d1d1b;
-      --muted: #6f675c;
-      --line: #d7ccbc;
-      --accent: #165dff;
-      --accent-soft: #eaf1ff;
-      --good: #17653a;
-      --bad: #a62222;
-      --shadow: 0 18px 40px rgba(38, 31, 19, 0.08);
+      --canvas: #ede6da;
+      --canvas-deep: #ddd2c2;
+      --paper: #fbf7ef;
+      --paper-strong: #fffdf8;
+      --ink: #17221f;
+      --muted: #6d736c;
+      --line: #cfc4b3;
+      --teal: #006d77;
+      --teal-deep: #004e55;
+      --teal-soft: #d9eeee;
+      --orange: #cf5536;
+      --orange-soft: #f5ded5;
+      --green: #2c744f;
+      --red: #a83c32;
+      --shadow: 0 20px 55px rgba(37, 45, 39, .10);
+      --radius: 20px;
     }
     * { box-sizing: border-box; }
+    html { min-height: 100%; }
     body {
       margin: 0;
-      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at top left, rgba(22, 93, 255, 0.08), transparent 26%),
-        radial-gradient(circle at bottom right, rgba(217, 124, 65, 0.12), transparent 28%),
-        linear-gradient(180deg, #f7f3eb 0%, #f2ede2 100%);
       min-height: 100vh;
+      color: var(--ink);
+      font-family: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+      background:
+        linear-gradient(115deg, transparent 0 72%, rgba(0,109,119,.07) 72% 73%, transparent 73%),
+        radial-gradient(circle at 5% 0%, rgba(207,85,54,.14), transparent 28%),
+        radial-gradient(circle at 100% 88%, rgba(0,109,119,.13), transparent 31%),
+        var(--canvas);
     }
-    .shell {
-      width: min(1180px, calc(100vw - 32px));
-      margin: 28px auto;
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    code, pre, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    .topbar {
+      min-height: 74px;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid rgba(23,34,31,.16);
+      background: rgba(251,247,239,.82);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .mark {
+      width: 42px; height: 42px; border-radius: 13px;
+      display: grid; place-items: center;
+      background: var(--ink); color: var(--paper);
+      font-family: Baskerville, Georgia, serif;
+      font-size: 23px; font-weight: 700;
+      transform: rotate(-4deg);
+      box-shadow: 5px 5px 0 var(--orange);
+    }
+    .brand h1 { margin: 0; font: 700 22px/1 Baskerville, Georgia, serif; letter-spacing: -.02em; }
+    .brand p { margin: 4px 0 0; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .14em; }
+    .top-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .pill {
+      padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px;
+      background: rgba(255,253,248,.8); color: var(--muted); font-size: 12px;
+    }
+    .pill strong { color: var(--ink); }
+    .layout {
+      width: min(1560px, calc(100vw - 28px));
+      margin: 18px auto 34px;
       display: grid;
-      grid-template-columns: 420px 1fr;
-      gap: 22px;
+      grid-template-columns: 196px minmax(0, 1fr) 350px;
+      gap: 16px;
+      align-items: start;
     }
-    .panel {
-      background: var(--panel);
+    .nav, .task-rail, .panel {
       border: 1px solid var(--line);
-      border-radius: 22px;
+      border-radius: var(--radius);
+      background: rgba(251,247,239,.94);
       box-shadow: var(--shadow);
-      padding: 22px;
     }
-    h1, h2, h3 { margin: 0; font-weight: 700; }
-    h1 { font-size: 30px; letter-spacing: -0.02em; }
-    h2 { font-size: 17px; margin-bottom: 16px; }
-    .lede {
-      margin-top: 10px;
-      color: var(--muted);
-      line-height: 1.5;
-      font-size: 14px;
+    .nav { padding: 12px; position: sticky; top: 92px; }
+    .nav button {
+      width: 100%; border: 0; border-radius: 13px; background: transparent;
+      padding: 12px 13px; margin: 2px 0; text-align: left; cursor: pointer;
+      display: flex; gap: 10px; align-items: center; color: var(--muted);
+      transition: background 160ms ease, transform 160ms ease, color 160ms ease;
     }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 14px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 13px;
-      font-weight: 700;
+    .nav button:hover { background: var(--teal-soft); color: var(--ink); transform: translateX(2px); }
+    .nav button.active { background: var(--ink); color: var(--paper); }
+    .nav .index { width: 23px; font: 700 11px/1 "SFMono-Regular", monospace; opacity: .7; }
+    main { min-width: 0; }
+    .page { display: none; animation: rise 260ms ease both; }
+    .page.active { display: grid; gap: 16px; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .panel { padding: 20px; }
+    .hero {
+      padding: 24px;
+      background:
+        linear-gradient(115deg, rgba(255,255,255,.62), transparent),
+        var(--paper);
+      overflow: hidden; position: relative;
     }
-    .form-grid {
-      display: grid;
-      gap: 14px;
+    .hero::after {
+      content: ""; position: absolute; right: -42px; top: -58px;
+      width: 180px; height: 180px; border: 24px solid var(--teal-soft); border-radius: 50%;
     }
-    label {
-      display: grid;
-      gap: 6px;
-      font-size: 13px;
-      color: var(--muted);
+    .hero > * { position: relative; z-index: 1; }
+    .eyebrow { color: var(--orange); font: 700 11px/1 "SFMono-Regular", monospace; text-transform: uppercase; letter-spacing: .14em; }
+    h2, h3 { margin: 0; font-family: Baskerville, Georgia, serif; }
+    h2 { margin-top: 7px; font-size: clamp(27px, 4vw, 42px); line-height: 1; letter-spacing: -.035em; max-width: 700px; }
+    h3 { font-size: 20px; }
+    .lede { color: var(--muted); line-height: 1.55; max-width: 760px; margin: 12px 0 0; }
+    .section-head { display: flex; justify-content: space-between; gap: 14px; align-items: start; margin-bottom: 16px; }
+    .section-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .field { display: grid; gap: 6px; min-width: 0; }
+    .field > span, .field-label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 12px;
+      background: var(--paper-strong); color: var(--ink); padding: 11px 12px; outline: none;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
     }
-    input[type="text"], input[type="password"] {
-      width: 100%;
-      border: 1px solid var(--line);
-      background: #fff;
-      border-radius: 14px;
-      padding: 12px 14px;
-      font-size: 14px;
-      color: var(--ink);
+    textarea { min-height: 190px; resize: vertical; line-height: 1.5; }
+    input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(0,109,119,.12); }
+    input::placeholder, textarea::placeholder { color: #99978f; }
+    input:disabled, select:disabled { opacity: .62; cursor: not-allowed; background: #eee8dd; }
+    .check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+    .check input { accent-color: var(--teal); }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-top: 14px; }
+    .btn {
+      border: 1px solid transparent; border-radius: 999px; padding: 10px 15px;
+      cursor: pointer; font-weight: 700; font-size: 13px;
+      transition: transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
     }
-    input::placeholder { color: #9a907f; }
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    .btn.primary { background: var(--teal); color: #fff; box-shadow: 0 8px 18px rgba(0,109,119,.18); }
+    .btn.ink { background: var(--ink); color: var(--paper); }
+    .btn.secondary { background: #ece4d8; border-color: var(--line); }
+    .btn.danger { background: var(--orange-soft); color: var(--red); border-color: #e7b9aa; }
+    .btn.small { padding: 7px 10px; font-size: 11px; }
+    .callout { border-left: 4px solid var(--teal); padding: 11px 13px; background: var(--teal-soft); border-radius: 0 12px 12px 0; color: var(--teal-deep); font-size: 13px; }
+    .callout.warn { border-color: var(--orange); background: var(--orange-soft); color: #703322; }
+    .split-editor { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 14px; }
+    .list-stack { display: grid; gap: 9px; }
+    .card-row {
+      border: 1px solid var(--line); border-radius: 13px; background: var(--paper-strong);
+      padding: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
     }
-    .controls {
-      display: flex;
-      gap: 10px;
-      margin-top: 8px;
-      flex-wrap: wrap;
+    .card-row strong { display: block; font-size: 13px; }
+    .card-row small { display: block; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+    .row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .tag { display: inline-flex; border-radius: 999px; padding: 4px 7px; background: #ece4d8; color: var(--muted); font-size: 10px; font-weight: 700; }
+    .tag.good { background: #dcecdf; color: var(--green); }
+    .tag.warn { background: var(--orange-soft); color: var(--orange); }
+    button.tag-delete { border: 0; cursor: pointer; font: inherit; }
+    button.tag-delete:hover { background: var(--orange-soft); color: var(--orange); }
+    .muted { color: var(--muted); }
+    .hidden { display: none !important; }
+    .task-rail { position: sticky; top: 92px; overflow: hidden; }
+    .task-head { padding: 18px; color: var(--paper); background: var(--ink); }
+    .task-head h3 { font-size: 18px; }
+    .task-head p { margin: 6px 0 0; color: #b9c4bd; font-size: 12px; overflow-wrap: anywhere; }
+    .task-body { padding: 16px; display: grid; gap: 14px; }
+    .progress { height: 12px; border-radius: 999px; overflow: hidden; background: var(--canvas-deep); }
+    .progress > div { width: 0%; height: 100%; background: linear-gradient(90deg, var(--orange), var(--teal)); transition: width 180ms linear; }
+    .task-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .task-stat { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--paper-strong); min-width: 0; }
+    .task-stat span { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .task-stat strong { display: block; margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+    .task-log { max-height: 250px; overflow: auto; display: grid; gap: 7px; }
+    .task-item { border-left: 3px solid var(--line); padding: 7px 9px; font-size: 11px; overflow-wrap: anywhere; background: rgba(255,255,255,.5); }
+    .task-item.ok { border-color: var(--green); }
+    .task-item.err { border-color: var(--red); }
+    .status-ok { color: var(--green) !important; }
+    .status-bad { color: var(--red) !important; }
+    .platform-list { display: grid; gap: 8px; max-height: 240px; overflow: auto; margin-top: 12px; }
+    .platform-option { border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px; background: var(--paper-strong); display: flex; gap: 9px; align-items: center; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 10px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .file-row { cursor: grab; }
+    .file-row:active { cursor: grabbing; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-card { border-top: 5px solid var(--teal); }
+    .form-card.orange { border-top-color: var(--orange); }
+    .form-card form { display: grid; gap: 10px; margin-top: 14px; }
+    dialog { border: 1px solid var(--line); border-radius: 18px; background: var(--paper); color: var(--ink); padding: 0; box-shadow: var(--shadow); max-width: min(520px, calc(100vw - 30px)); }
+    dialog::backdrop { background: rgba(23,34,31,.42); backdrop-filter: blur(4px); }
+    .dialog-body { padding: 22px; }
+    .toast-zone { position: fixed; right: 18px; bottom: 18px; z-index: 50; display: grid; gap: 8px; width: min(360px, calc(100vw - 36px)); }
+    .toast { border-radius: 13px; padding: 12px 14px; color: #fff; background: var(--ink); box-shadow: var(--shadow); animation: rise 180ms ease both; font-size: 13px; }
+    .toast.error { background: var(--red); }
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: 170px minmax(0, 1fr); }
+      .task-rail { grid-column: 2; position: static; }
     }
-    button {
-      appearance: none;
-      border: none;
-      border-radius: 999px;
-      padding: 12px 18px;
-      font-size: 14px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .primary {
-      color: #fff;
-      background: linear-gradient(135deg, #165dff, #0d3fb3);
-    }
-    .secondary {
-      color: var(--ink);
-      background: #efe7d9;
-    }
-    .platforms {
-      margin-top: 18px;
-      display: grid;
-      gap: 10px;
-      max-height: 260px;
-      overflow: auto;
-      padding-right: 4px;
-    }
-    .platform {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 10px 12px;
-      background: #fff;
-    }
-    .hint {
-      color: var(--muted);
-      font-size: 12px;
-      margin-top: 6px;
-      line-height: 1.45;
-    }
-    .status-card {
-      display: grid;
-      gap: 18px;
-    }
-    .progress-wrap {
-      border-radius: 999px;
-      overflow: hidden;
-      background: #eadfcd;
-      height: 14px;
-    }
-    .progress-bar {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #165dff, #4d87ff);
-      transition: width 180ms linear;
-    }
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-    }
-    .stat {
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 14px;
-      background: #fff;
-    }
-    .stat .label {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 6px;
-    }
-    .stat .value {
-      font-size: 16px;
-      font-weight: 700;
-      word-break: break-word;
-    }
-    .results, .commands {
-      display: grid;
-      gap: 10px;
-    }
-    .result-item, .command-item {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: #fff;
-      padding: 12px 14px;
-    }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
-    }
-    .ok { color: var(--good); }
-    .err { color: var(--bad); }
-    @media (max-width: 960px) {
-      .shell { grid-template-columns: 1fr; }
-      .row, .stat-grid { grid-template-columns: 1fr; }
+    @media (max-width: 760px) {
+      .topbar { position: static; padding: 12px 15px; }
+      .top-meta .pill:not(:first-child) { display: none; }
+      .layout { width: min(100% - 18px, 760px); grid-template-columns: 1fr; margin-top: 9px; }
+      .nav { position: static; display: flex; overflow-x: auto; gap: 5px; padding: 8px; }
+      .nav button { min-width: max-content; width: auto; }
+      .nav .index { display: none; }
+      .task-rail { grid-column: 1; }
+      .grid-2, .grid-3, .settings-grid, .split-editor { grid-template-columns: 1fr; }
+      .panel { padding: 16px; }
+      .hero { padding: 20px; }
     }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <section class="panel">
-      <h1>dia GUI</h1>
-      <p class="lede">Same binary, local-only web UI. The browser drives the existing export engine; the server listens on <code>127.0.0.1</code> only.</p>
-      <div class="badge">CLI + Wizard + GUI</div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">d</div>
+      <div><h1>dia control deck</h1><p>registry operations without docker</p></div>
+    </div>
+    <div class="top-meta">
+      <div class="pill">默认执行机 <strong id="topDefaultRemote">未设置</strong></div>
+      <div class="pill">本地回环 <strong>127.0.0.1</strong></div>
+      <div class="pill">版本 <strong id="topVersion">dev</strong></div>
+    </div>
+  </header>
 
-      <div class="form-grid" style="margin-top: 18px;">
-        <label>
-          Image
-          <input id="image" type="text" placeholder="apkdv/siyuan-unlock:v3.5.10">
-        </label>
-        <label>
-          Output
-          <input id="output" type="text" placeholder="apkdv_siyuan-unlock_v3.5.10.tar">
-        </label>
-        <label>
-          Proxy
-          <input id="proxy" type="text" placeholder="socks5://127.0.0.1:7897 / socks5h://127.0.0.1:7897 / http://127.0.0.1:7890">
-        </label>
-        <div class="row">
-          <label>
-            Username
-            <input id="username" type="text" placeholder="optional">
-          </label>
-          <label>
-            Password
-            <input id="password" type="password" placeholder="optional">
-            <span id="savedPasswordWrap" class="hint" style="display:none;">
-              <label style="display:flex; grid-template-columns:none; align-items:center; gap:8px; color:var(--muted);">
-                <input id="useSavedPassword" type="checkbox">
-                <span>Use configured password</span>
-              </label>
-            </span>
-          </label>
-        </div>
-        <label>
-          <span><input id="insecure" type="checkbox"> Insecure TLS</span>
-        </label>
-      </div>
+  <div class="layout">
+    <nav class="nav" aria-label="主导航">
+      <button class="active" data-page="sync"><span class="index">01</span><span>镜像同步</span></button>
+      <button data-page="harbor"><span class="index">02</span><span>Harbor 管理</span></button>
+      <button data-page="files"><span class="index">03</span><span>远程文件</span></button>
+      <button data-page="export"><span class="index">04</span><span>单镜像导出</span></button>
+      <button data-page="settings"><span class="index">05</span><span>连接设置</span></button>
+    </nav>
 
-      <div class="controls">
-        <button class="secondary" id="inspect">Inspect Architectures</button>
-        <button class="primary" id="export">Export Selected</button>
-      </div>
-      <p class="hint">`socks5://` uses local DNS. `socks5h://` leaves DNS resolution to the proxy. Use `http://` for HTTP/HTTPS proxy ports.</p>
+    <main>
+      <section id="page-sync" class="page active">
+        <div class="panel hero">
+          <div class="eyebrow">Remote pipeline</div>
+          <h2>数据在执行机上流动，不绕行当前电脑。</h2>
+          <p class="lede">选择来源、目标、持久化镜像清单和 SSH 执行机。Registry 到 Registry 直接流式复制；目标为 local_tar 时，执行机自动选择可写且可用空间最大的分区。</p>
+        </div>
 
-      <div id="platforms" class="platforms"></div>
-    </section>
+        <div class="panel">
+          <div class="section-head"><div><h3>传输拓扑</h3><p>每个同步任务必须绑定一台执行机；可临时选择或更新默认值。</p></div><span class="tag">no local transit</span></div>
+          <div class="grid-3">
+            <label class="field"><span>执行机</span><select id="syncRemote"></select></label>
+            <label class="field"><span>来源 Registry</span><select id="syncSourceRegistry"></select></label>
+            <label class="field"><span>来源账号</span><select id="syncSourceCredential"></select></label>
+            <label class="field"><span>目标类型</span><select id="syncTargetType"><option value="registry">Registry / Harbor</option><option value="local_tar">local_tar（最大可用分区）</option></select></label>
+            <label class="field" id="syncTargetRegistryWrap"><span>目标 Registry</span><select id="syncTargetRegistry"></select></label>
+            <label class="field" id="syncTargetCredentialWrap"><span>目标账号</span><select id="syncTargetCredential"></select></label>
+            <label class="field"><span>传输引擎</span><select id="syncEngine"><option value="auto">auto（有 skopeo 则使用）</option><option value="native">native Registry V2</option><option value="skopeo">skopeo（执行机必须已安装）</option></select></label>
+            <label class="field" id="syncOutputRootWrap"><span>local_tar 目录覆盖</span><input id="syncOutputRoot" type="text" placeholder="留空：自动选择最大可用分区"></label>
+          </div>
+          <div class="actions">
+            <button id="setDefaultRemote" class="btn secondary">设为默认执行机</button>
+            <button id="probeSyncStorage" class="btn secondary">查看执行机磁盘</button>
+          </div>
+          <div id="syncStorageHint" class="callout hidden"></div>
+        </div>
 
-    <section class="panel status-card">
-      <div>
-        <h2>Task Status</h2>
-        <div id="summary" class="lede">No task started.</div>
-      </div>
-      <div class="progress-wrap">
-        <div id="progressBar" class="progress-bar"></div>
-      </div>
-      <div class="stat-grid">
-        <div class="stat">
-          <span class="label">Stage</span>
-          <span id="stage" class="value">idle</span>
+        <div class="panel">
+          <div class="section-head"><div><h3>镜像清单</h3><p>支持空行、# 注释，以及 <span class="mono">source/image:tag -&gt; target/image:tag</span> 重命名。</p></div><span id="listSaveState" class="tag">已持久化</span></div>
+          <div class="split-editor">
+            <div>
+              <div class="grid-2">
+                <label class="field"><span>已保存清单</span><select id="syncImageList"></select></label>
+                <label class="field"><span>清单名称</span><input id="syncImageListName" type="text" placeholder="例如：v3.5.10 发布集"></label>
+              </div>
+              <label class="field" style="margin-top:10px"><span>每行一个镜像</span><textarea id="syncImages" class="mono" spellcheck="false" placeholder="# service images&#10;team/api:v1&#10;team/worker:v1 -> archive/worker:v1"></textarea></label>
+              <div class="actions">
+                <button id="saveImageList" class="btn secondary">保存清单</button>
+                <button id="newImageList" class="btn secondary">新建</button>
+                <button id="deleteImageList" class="btn danger">删除</button>
+                <button id="startSync" class="btn primary">在执行机上开始同步</button>
+              </div>
+            </div>
+            <div class="callout">
+              <strong>执行语义</strong><br><br>
+              普通行会保留仓库路径与 tag，并分别应用来源/目标配置中的 namespace。<br><br>
+              Registry 目标不会创建本地 tar；local_tar 目标会按 OS/arch 分开保存、给多平台 tag 添加平台后缀，并生成平台索引。local_tar 的右侧目标必须使用 tag。
+            </div>
+          </div>
         </div>
-        <div class="stat">
-          <span class="label">Platform</span>
-          <span id="platform" class="value">-</span>
+      </section>
+
+      <section id="page-harbor" class="page">
+        <div class="panel hero">
+          <div class="eyebrow">Harbor API v2</div>
+          <h2>从同一个界面浏览、标记与清理制品。</h2>
+          <p class="lede">可由当前 dia 进程直接访问 Harbor，也可把请求交给指定 SSH 执行机。账号密码只在后端解密，不注入页面。</p>
         </div>
-        <div class="stat">
-          <span class="label">Layer</span>
-          <span id="layer" class="value">-</span>
+        <div class="panel">
+          <div class="grid-3">
+            <label class="field"><span>Harbor</span><select id="harborRegistry"></select></label>
+            <label class="field"><span>账号</span><select id="harborCredential"></select></label>
+            <label class="field"><span>访问路径</span><select id="harborRemote"></select></label>
+          </div>
+          <div class="actions">
+            <button id="harborHealth" class="btn secondary">检查健康状态</button>
+            <button id="loadProjects" class="btn primary">加载项目</button>
+            <button id="loadMoreProjects" class="btn secondary" disabled>加载更多项目</button>
+          </div>
+          <div id="harborHealthResult" class="callout hidden"></div>
         </div>
-        <div class="stat">
-          <span class="label">Speed / ETA</span>
-          <span id="rate" class="value">-</span>
+        <div class="panel">
+          <div class="section-head"><div><h3>项目与仓库</h3><p>删除操作均要求二次确认。</p></div></div>
+          <div class="grid-3">
+            <label class="field"><span>项目</span><select id="harborProject"></select></label>
+            <label class="field"><span>仓库</span><select id="harborRepository"></select></label>
+            <label class="field"><span>过滤表达式 q</span><input id="harborQuery" type="text" placeholder="tags=~v3"></label>
+          </div>
+          <div class="actions">
+            <input id="newProjectName" type="text" style="max-width:220px" placeholder="新项目名称">
+            <label class="check"><input id="newProjectPublic" type="checkbox">公开项目</label>
+            <button id="createProject" class="btn secondary">创建项目</button>
+            <button id="loadMoreRepositories" class="btn secondary" disabled>加载更多仓库</button>
+            <button id="deleteRepository" class="btn danger">删除当前仓库</button>
+            <button id="deleteProject" class="btn danger">删除当前项目</button>
+          </div>
         </div>
+        <div class="panel">
+          <div class="section-head"><div><h3>制品</h3><p id="artifactCaption">选择项目和仓库后加载。</p></div><div class="row-actions"><button id="loadArtifacts" class="btn secondary small">刷新制品</button><button id="loadMoreArtifacts" class="btn secondary small" disabled>加载更多</button></div></div>
+          <div class="table-wrap"><table><thead><tr><th>Digest / Tags</th><th>类型</th><th>大小</th><th>推送时间</th><th>操作</th></tr></thead><tbody id="artifactRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="page-files" class="page">
+        <div class="panel hero">
+          <div class="eyebrow">Remote archive shelf</div>
+          <h2>先看元数据，需要时才把文件拖回来。</h2>
+          <p class="lede">目录浏览只传输文件名、大小和时间。点击下载或把文件拖到 Windows 资源管理器时，才通过 SSH 按需流式传输，并附带 SHA-256。</p>
+        </div>
+        <div class="panel">
+          <div class="grid-2">
+            <label class="field"><span>执行机</span><select id="fileRemote"></select></label>
+            <label class="field"><span>远程目录</span><input id="filePath" type="text" placeholder="留空：workspace"></label>
+          </div>
+          <div class="actions"><button id="loadFiles" class="btn primary">浏览</button><button id="fileUp" class="btn secondary">上一级</button><button id="loadStorage" class="btn secondary">磁盘容量</button></div>
+          <div id="storageCards" class="grid-3" style="margin-top:14px"></div>
+        </div>
+        <div class="panel">
+          <div class="section-head"><div><h3>远程文件</h3><p>Chromium/Edge 支持将带下载 URL 的行拖出浏览器；其他浏览器使用“下载”。</p></div></div>
+          <div class="table-wrap"><table><thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody id="fileRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="page-export" class="page">
+        <div class="panel hero">
+          <div class="eyebrow">Legacy single export</div>
+          <h2>单镜像直接生成 docker load tar。</h2>
+          <p class="lede">保留原有本机导出能力。批量迁移或远端保存请使用“镜像同步”。</p>
+        </div>
+        <div class="panel">
+          <div class="grid-2">
+            <label class="field"><span>Registry 配置（可选）</span><select id="exportRegistry"></select></label>
+            <label class="field"><span>保存账号（可选）</span><select id="exportCredential"></select></label>
+            <label class="field"><span>镜像</span><input id="exportImage" type="text" placeholder="alpine:latest"></label>
+            <label class="field"><span>输出 tar</span><input id="exportOutput" type="text" placeholder="alpine_latest.tar"></label>
+            <label class="field"><span>临时代理覆盖</span><input id="exportProxy" type="text" placeholder="socks5://127.0.0.1:7897 | socks5h://127.0.0.1:7897 | http://127.0.0.1:7890"></label>
+            <label class="field"><span>临时用户名</span><input id="exportUsername" type="text" placeholder="不使用保存账号时填写"></label>
+            <label class="field"><span>临时密码</span><input id="exportPassword" type="password" autocomplete="new-password"></label>
+          </div>
+          <label id="exportSavedPasswordWrap" class="check hidden" style="margin-top:10px"><input id="exportUseSavedPassword" type="checkbox">使用启动参数或 DIA_REGISTRY_PASSWORD 中的隐藏密码</label>
+          <label id="exportSavedProxyWrap" class="check hidden" style="margin-top:10px"><input id="exportUseSavedProxy" type="checkbox">使用启动参数中的隐藏代理凭据</label>
+          <label class="check" style="margin-top:10px"><input id="exportInsecure" type="checkbox">跳过 TLS 证书校验</label>
+          <div class="actions"><button id="inspectExport" class="btn secondary">检查架构</button><button id="startExport" class="btn primary">导出已选架构</button></div>
+          <div id="exportPlatforms" class="platform-list"></div>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page">
+        <div class="panel hero">
+          <div class="eyebrow">Persistent connection book</div>
+          <h2>站点、账号和 SSH 主机集中保存。</h2>
+          <p class="lede">密码与 SSH 密码/私钥口令保存在 AES-GCM 加密 vault；页面只得到 has_secret 标记。留空密码表示保持原值，勾选清除才会删除。</p>
+        </div>
+        <div class="settings-grid">
+          <div class="panel form-card">
+            <div class="section-head"><div><h3>Registry / Harbor</h3><p>Endpoint、namespace、代理与 TLS。</p></div></div>
+            <div id="registryList" class="list-stack"></div>
+            <form id="registryForm">
+              <input id="registryID" type="hidden">
+              <div class="grid-2"><label class="field"><span>名称</span><input id="registryName" type="text" required></label><label class="field"><span>类型</span><select id="registryKind"><option value="registry">Registry</option><option value="harbor">Harbor</option></select></label></div>
+              <label class="field"><span>Endpoint</span><input id="registryEndpoint" type="text" placeholder="https://registry.example.com" required></label>
+              <div class="grid-2"><label class="field"><span>Namespace</span><input id="registryNamespace" type="text" placeholder="可选"></label><label class="field"><span>代理</span><input id="registryProxy" type="text" placeholder="socks5://127.0.0.1:7897 | socks5h://127.0.0.1:7897 | http://127.0.0.1:7890"></label></div>
+              <label class="check"><input id="registryInsecure" type="checkbox">Insecure TLS</label>
+              <div class="actions"><button class="btn primary" type="submit">保存站点</button><button id="resetRegistryForm" class="btn secondary" type="button">新建</button></div>
+            </form>
+          </div>
+
+          <div class="panel form-card orange">
+            <div class="section-head"><div><h3>Registry 账号</h3><p>同一站点可保存多个用户或 robot account。</p></div></div>
+            <div id="credentialList" class="list-stack"></div>
+            <form id="credentialForm">
+              <input id="credentialID" type="hidden">
+              <label class="field"><span>所属站点</span><select id="credentialRegistry"></select></label>
+              <div class="grid-2"><label class="field"><span>账号备注</span><input id="credentialName" type="text" placeholder="生产只读" required></label><label class="field"><span>用户名</span><input id="credentialUsername" type="text" required></label></div>
+              <label class="field"><span>密码 / token</span><input id="credentialSecret" type="password" autocomplete="new-password" placeholder="留空保持已保存值"></label>
+              <label class="check"><input id="credentialClearSecret" type="checkbox">清除已保存密码</label>
+              <div class="actions"><button class="btn primary" type="submit">保存账号</button><button id="resetCredentialForm" class="btn secondary" type="button">新建</button></div>
+            </form>
+          </div>
+
+          <div class="panel form-card orange">
+            <div class="section-head"><div><h3>SSH 执行机</h3><p>Linux/macOS；首次连接必须确认 host key。</p></div></div>
+            <div id="remoteList" class="list-stack"></div>
+            <form id="remoteForm">
+              <input id="remoteID" type="hidden">
+              <div class="grid-2"><label class="field"><span>名称</span><input id="remoteName" type="text" required></label><label class="field"><span>认证</span><select id="remoteAuth"><option value="agent">SSH agent</option><option value="key">私钥</option><option value="password">密码</option></select></label></div>
+              <div class="grid-3"><label class="field"><span>主机</span><input id="remoteAddress" type="text" required></label><label class="field"><span>端口</span><input id="remotePort" type="number" min="1" max="65535" value="22"></label><label class="field"><span>用户</span><input id="remoteUser" type="text" required></label></div>
+              <label class="field"><span>私钥路径</span><input id="remoteKeyPath" type="text" placeholder="~/.ssh/id_ed25519"></label>
+              <label class="field"><span>密码 / 私钥口令</span><input id="remoteSecret" type="password" autocomplete="new-password" placeholder="留空保持已保存值"></label>
+              <label class="check"><input id="remoteClearSecret" type="checkbox">清除已保存 SSH secret</label>
+              <div class="grid-2"><label class="field"><span>Workspace</span><input id="remoteWorkspace" type="text" value="~/.local/share/dia"></label><label class="field"><span>远端 dia 路径</span><input id="remoteDiaPath" type="text" placeholder="~/.local/bin/dia"></label></div>
+              <label class="field"><span>候选存储根（每行一个）</span><textarea id="remoteStorageRoots" class="mono" style="min-height:90px" placeholder="/data/archive&#10;/mnt/bigdisk"></textarea></label>
+              <div class="actions"><button class="btn primary" type="submit">保存执行机</button><button id="resetRemoteForm" class="btn secondary" type="button">新建</button></div>
+            </form>
+          </div>
+
+          <div class="panel form-card">
+            <div class="section-head"><div><h3>运行边界</h3><p>默认行为与安全约束。</p></div></div>
+            <div class="callout">同步任务只能在保存的 SSH 执行机上运行。远端代理通过 stdio 单次启动，不监听 TCP 端口；所有文件访问限制在 workspace 和 storage roots。</div>
+            <div class="callout warn" style="margin-top:12px">删除 Harbor 制品、远程 tar 或配置记录都会在页面二次确认。Registry 密码和代理凭据永不写入任务快照、HTML bootstrap 或日志。</div>
+            <div class="actions"><button id="goToLists" class="btn secondary">前往镜像清单编辑器</button></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="task-rail">
+      <div class="task-head"><h3 id="taskTitle">任务尚未开始</h3><p id="taskSummary">同步与导出进度会显示在这里。</p></div>
+      <div class="task-body">
+        <div class="progress"><div id="taskProgress"></div></div>
+        <div class="task-stats">
+          <div class="task-stat"><span>stage</span><strong id="taskStage">idle</strong></div>
+          <div class="task-stat"><span>image / platform</span><strong id="taskPlatform">-</strong></div>
+          <div class="task-stat"><span>item</span><strong id="taskItem">-</strong></div>
+          <div class="task-stat"><span>speed / eta</span><strong id="taskRate">-</strong></div>
+        </div>
+        <div class="actions" style="margin-top:0"><button id="cancelTask" class="btn danger small" disabled>取消任务</button></div>
+        <div><div class="field-label">结果与输出</div><div id="taskOutputs" class="task-log" style="margin-top:7px"></div></div>
+        <div><div class="field-label">手动 docker load</div><div id="taskCommands" class="task-log" style="margin-top:7px"></div></div>
+        <div id="taskError" class="callout warn hidden"></div>
       </div>
-      <div class="results">
-        <h3>Outputs</h3>
-        <div id="outputs"></div>
-      </div>
-      <div class="commands">
-        <h3>Manual Docker Load</h3>
-        <div id="commands"></div>
-      </div>
-      <div>
-        <h3>Errors</h3>
-        <div id="error" class="result-item"></div>
-      </div>
-    </section>
+    </aside>
   </div>
+
+  <dialog id="confirmDialog"><div class="dialog-body"><h3 id="confirmTitle">确认操作</h3><p id="confirmText" class="lede"></p><div class="actions"><button id="confirmYes" class="btn danger">确认</button><button id="confirmNo" class="btn secondary">取消</button></div></div></dialog>
+  <div id="toastZone" class="toast-zone" aria-live="polite"></div>
 
   <script>
     const bootstrap = JSON.parse('__DIA_BOOTSTRAP_JSON__');
-    const imageInput = document.getElementById('image');
-    const outputInput = document.getElementById('output');
-    const proxyInput = document.getElementById('proxy');
-    const usernameInput = document.getElementById('username');
-    const passwordInput = document.getElementById('password');
-    const savedPasswordWrap = document.getElementById('savedPasswordWrap');
-    const useSavedPasswordInput = document.getElementById('useSavedPassword');
-    const insecureInput = document.getElementById('insecure');
-    const platformsEl = document.getElementById('platforms');
-    const summaryEl = document.getElementById('summary');
-    const stageEl = document.getElementById('stage');
-    const platformEl = document.getElementById('platform');
-    const layerEl = document.getElementById('layer');
-    const rateEl = document.getElementById('rate');
-    const outputsEl = document.getElementById('outputs');
-    const commandsEl = document.getElementById('commands');
-    const errorEl = document.getElementById('error');
-    const progressBarEl = document.getElementById('progressBar');
+    const ANONYMOUS_CREDENTIAL = '__anonymous__';
+    const LOCAL_HARBOR_EXECUTION = '__local__';
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      settings: { registries: [], credentials: [], remotes: [], image_lists: [], default_remote_id: '' },
+      currentTaskID: '', taskStream: null, taskPollTimer: null,
+      exportPlatforms: [], exportInspectionKey: '', exportInspectSequence: 0, exportOutputAutomatic: !bootstrap.output_explicit,
+      currentListID: '', listDirty: false,
+      harborProjects: [], harborRepositories: [], harborArtifacts: [],
+      harborProjectNextPage: 0, harborRepositoryNextPage: 0, harborArtifactNextPage: 0
+    };
+    $('topVersion').textContent = bootstrap.version || 'dev';
 
-    let inspectedPlatforms = [];
-    let currentTaskStream = null;
-    let lastInspectKey = '';
-    let lastDefaultOutput = bootstrap.output_explicit ? '' : (bootstrap.output || '');
-    imageInput.value = bootstrap.image || 'alpine:latest';
-    outputInput.value = bootstrap.output || '';
-    proxyInput.value = bootstrap.proxy || '';
-    usernameInput.value = bootstrap.username || '';
-    passwordInput.value = bootstrap.password || '';
-    insecureInput.checked = Boolean(bootstrap.insecure);
-    savedPasswordWrap.style.display = bootstrap.has_saved_password ? 'block' : 'none';
-    useSavedPasswordInput.checked = Boolean(bootstrap.has_saved_password);
-
-    function payload() {
-      return {
-        image: imageInput.value.trim(),
-        output: outputInput.value.trim(),
-        proxy: proxyInput.value.trim(),
-        username: usernameInput.value.trim(),
-        password: passwordInput.value,
-        use_saved_password: useSavedPasswordInput.checked && !passwordInput.value.trim(),
-        insecure: insecureInput.checked
-      };
-    }
-
-    function inspectKey() {
-      const current = payload();
-      return JSON.stringify({
-        image: current.image,
-        proxy: current.proxy,
-        username: current.username,
-        password: current.password,
-        use_saved_password: current.use_saved_password,
-        insecure: current.insecure
+    function node(tag, attrs = {}, ...children) {
+      const element = document.createElement(tag);
+      Object.entries(attrs).forEach(([key, value]) => {
+        if (key === 'class') element.className = value;
+        else if (key === 'text') element.textContent = value;
+        else if (key.startsWith('on') && typeof value === 'function') element.addEventListener(key.slice(2), value);
+        else if (value !== undefined && value !== null) element.setAttribute(key, String(value));
       });
+      children.flat().forEach((child) => {
+        if (child === null || child === undefined) return;
+        element.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
+      });
+      return element;
     }
-
-    passwordInput.addEventListener('input', () => {
-      if (passwordInput.value.trim() !== '') {
-        useSavedPasswordInput.checked = false;
+    function clear(element) { element.replaceChildren(); }
+    function toast(message, isError = false) {
+      const item = node('div', { class: `toast${isError ? ' error' : ''}`, text: message });
+      $('toastZone').appendChild(item);
+      setTimeout(() => item.remove(), isError ? 6500 : 3500);
+    }
+    class APIError extends Error { constructor(message, status, payload) { super(message); this.status = status; this.payload = payload; } }
+    async function api(url, options = {}) {
+      const request = { ...options, headers: { ...(options.headers || {}) } };
+      if (request.body && typeof request.body !== 'string') {
+        request.headers['Content-Type'] = 'application/json';
+        request.body = JSON.stringify(request.body);
       }
-    });
-
-    function formatBytes(size) {
-      if (!size) return '0 B';
-      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-      let value = size;
-      let idx = 0;
-      while (value >= 1024 && idx < units.length - 1) {
-        value /= 1024;
-        idx += 1;
-      }
-      return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
-    }
-
-    function renderPlatforms(list) {
-      renderPlatformsWithSelection(list, null);
-    }
-
-    function platformKey(platform) {
-      return platform.manifest_ref || [platform.os || '', platform.architecture || '', platform.variant || ''].join('/');
-    }
-
-    function renderPlatformsWithSelection(list, selectedKeys) {
-      inspectedPlatforms = list;
-      platformsEl.innerHTML = '';
-      const hasSelectionMatch = selectedKeys && selectedKeys.size > 0
-        ? list.some((platform) => selectedKeys.has(platformKey(platform)))
-        : false;
-      list.forEach((platform) => {
-        const item = document.createElement('label');
-        item.className = 'platform';
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.dataset.manifestRef = platform.manifest_ref || '';
-        checkbox.checked = hasSelectionMatch ? selectedKeys.has(platformKey(platform)) : true;
-
-        const text = document.createElement('span');
-        text.textContent = `${platform.display_index}. ${platform.label}`;
-
-        item.appendChild(checkbox);
-        item.appendChild(text);
-        platformsEl.appendChild(item);
-      });
-    }
-
-    function selectedPlatforms() {
-      return Array.from(platformsEl.querySelectorAll('input[type="checkbox"]:checked'))
-        .map((node) => node.dataset.manifestRef || '')
-        .filter(Boolean);
-    }
-
-    async function inspect(selectedKeys = null) {
-      clearStatus();
-      const response = await fetch('/api/inspect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload())
-      });
-      const data = await response.json();
+      const response = await fetch(url, request);
+      const contentType = response.headers.get('Content-Type') || '';
+      const payload = contentType.includes('application/json') ? await response.json() : await response.text();
       if (!response.ok) {
-        throw new Error(data.error || 'inspect failed');
+        const message = payload && payload.error ? payload.error : String(payload || response.statusText);
+        throw new APIError(message, response.status, payload);
       }
-      const currentOutput = outputInput.value.trim();
-      if (!currentOutput || (lastDefaultOutput && currentOutput === lastDefaultOutput)) {
-        outputInput.value = data.default_output;
-      }
-      lastDefaultOutput = data.default_output;
-      renderPlatformsWithSelection(data.platforms, selectedKeys);
-      lastInspectKey = inspectKey();
-      summaryEl.textContent = `Loaded ${data.platforms.length} platform(s) for ${data.image}.`;
+      return payload;
+    }
+    function formatBytes(value) {
+      const size = Number(value || 0); if (!size) return '0 B';
+      const units = ['B','KiB','MiB','GiB','TiB']; let current = size; let index = 0;
+      while (current >= 1024 && index < units.length - 1) { current /= 1024; index += 1; }
+      return `${current.toFixed(index ? 1 : 0)} ${units[index]}`;
+    }
+    function formatTime(value) { if (!value) return '-'; const date = new Date(value); return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleString(); }
+    function selectedValue(id) { return $(id).value || ''; }
+    function fillSelect(element, items, placeholder, label, preferred, value = (item) => item.id) {
+      const old = preferred !== undefined ? preferred : element.value;
+      clear(element);
+      if (placeholder !== null) element.appendChild(node('option', { value: '', text: placeholder }));
+      items.forEach((item) => element.appendChild(node('option', { value: value(item), text: label(item) })));
+      if (Array.from(element.options).some((option) => option.value === old)) element.value = old;
+    }
+    function credentialsFor(registryID) { return state.settings.credentials.filter((item) => item.registry_id === registryID); }
+    function mergeUnique(items, additions, key) {
+      const merged = new Map(items.map((item) => [key(item), item]));
+      additions.forEach((item) => merged.set(key(item), item));
+      return Array.from(merged.values());
+    }
+    function fillCredentialSelect(selectID, registryID, preferred) {
+      const select = $(selectID), old = preferred !== undefined ? preferred : select.value;
+      clear(select);
+      select.appendChild(node('option', { value: ANONYMOUS_CREDENTIAL, text: '匿名 / 无账号' }));
+      credentialsFor(registryID).forEach((item) => select.appendChild(node('option', { value: item.id, text: `${item.name} · ${item.username}${item.has_secret ? ' · saved' : ''}` })));
+      const registry = state.settings.registries.find((item) => item.id === registryID);
+      const fallback = registry && registry.default_credential_id ? registry.default_credential_id : ANONYMOUS_CREDENTIAL;
+      select.value = Array.from(select.options).some((option) => option.value === old) ? old : fallback;
     }
 
-    async function startExport() {
-      if (!inspectedPlatforms.length || lastInspectKey !== inspectKey()) {
-        let preservedSelection = null;
-        if (inspectedPlatforms.length) {
-          preservedSelection = new Set(
-            selectedPlatforms()
-              .map((manifestRef) => inspectedPlatforms.find((platform) => platform.manifest_ref === manifestRef))
-              .filter(Boolean)
-              .map((platform) => platformKey(platform))
-          );
-        }
-        await inspect(preservedSelection);
-      }
-      const response = await fetch('/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...payload(),
-          selected: selectedPlatforms()
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'export failed');
-      }
-      subscribeTask(data.task_id);
+    function showPage(name) {
+      document.querySelectorAll('.page').forEach((page) => page.classList.toggle('active', page.id === `page-${name}`));
+      document.querySelectorAll('.nav button').forEach((button) => button.classList.toggle('active', button.dataset.page === name));
+    }
+    document.querySelectorAll('.nav button').forEach((button) => button.addEventListener('click', () => showPage(button.dataset.page)));
+    $('goToLists').addEventListener('click', () => showPage('sync'));
+
+    async function loadSettings(preferred = {}) {
+      state.settings = await api('/api/settings');
+      const defaultRemote = state.settings.remotes.find((item) => item.id === state.settings.default_remote_id);
+      $('topDefaultRemote').textContent = defaultRemote ? defaultRemote.name : '未设置';
+      fillSelect($('syncRemote'), state.settings.remotes, '选择执行机', (item) => `${item.name}${item.id === state.settings.default_remote_id ? ' · 默认' : ''}`, preferred.remote || $('syncRemote').value || state.settings.default_remote_id);
+      fillSelect($('fileRemote'), state.settings.remotes, '选择执行机', (item) => item.name, preferred.fileRemote || $('fileRemote').value || state.settings.default_remote_id);
+      fillSelect($('syncSourceRegistry'), state.settings.registries, '选择来源', (item) => `${item.name} · ${item.endpoint}`, preferred.source || $('syncSourceRegistry').value);
+      fillSelect($('syncTargetRegistry'), state.settings.registries, '选择目标', (item) => `${item.name} · ${item.endpoint}`, preferred.target || $('syncTargetRegistry').value);
+      const harbors = state.settings.registries.filter((item) => item.kind === 'harbor');
+      fillSelect($('harborRegistry'), harbors, '选择 Harbor', (item) => item.name, preferred.harbor || $('harborRegistry').value);
+      fillSelect($('exportRegistry'), state.settings.registries, '手动输入 / 不使用配置', (item) => item.name, preferred.exportRegistry || $('exportRegistry').value);
+      fillSelect($('credentialRegistry'), state.settings.registries, '选择站点', (item) => item.name, $('credentialRegistry').value);
+      const harborRemote = preferred.harborRemote || $('harborRemote').value || state.settings.default_remote_id || LOCAL_HARBOR_EXECUTION;
+      clear($('harborRemote')); $('harborRemote').appendChild(node('option', { value: LOCAL_HARBOR_EXECUTION, text: '本机直接访问' }));
+      state.settings.remotes.forEach((item) => $('harborRemote').appendChild(node('option', { value: item.id, text: `经 ${item.name}` })));
+      if (Array.from($('harborRemote').options).some((option) => option.value === harborRemote)) $('harborRemote').value = harborRemote;
+      fillCredentialSelect('syncSourceCredential', $('syncSourceRegistry').value);
+      fillCredentialSelect('syncTargetCredential', $('syncTargetRegistry').value);
+      fillCredentialSelect('harborCredential', $('harborRegistry').value);
+      fillCredentialSelect('exportCredential', $('exportRegistry').value);
+      updateExportRegistryMode(); invalidateExportInspection();
+      renderSettingsLists();
+      renderImageListSelect(preferred.list || state.currentListID);
     }
 
-    function subscribeTask(taskId) {
-      if (currentTaskStream) {
-        currentTaskStream.close();
+    function renderImageListSelect(preferred) {
+      fillSelect($('syncImageList'), state.settings.image_lists, '选择或新建清单', (item) => item.name, preferred);
+      if (state.listDirty) { updateListState(); return; }
+      if ($('syncImageList').value) loadSelectedImageList();
+      else if (!state.listDirty && !$('syncImages').value) {
+        $('syncImages').value = '# 每行一个镜像\nteam/api:v1\n';
+        $('syncImageListName').value = '';
       }
-      clearStatus();
-      summaryEl.textContent = `Task ${taskId} running.`;
-      currentTaskStream = new EventSource(`/api/tasks/${taskId}/events`);
-      currentTaskStream.onmessage = (event) => {
-        renderTask(JSON.parse(event.data));
-      };
-      currentTaskStream.onerror = () => {
-        summaryEl.textContent = 'Task event stream disconnected. Use refresh if needed.';
-      };
     }
-
-    function renderTask(task) {
-      const total = task.bytes_total || 0;
-      const done = task.bytes_done || 0;
-      const percent = total > 0 ? Math.min(100, (done / total) * 100) : 0;
-      progressBarEl.style.width = `${percent}%`;
-      summaryEl.className = `lede ${task.status === 'failed' ? 'err' : task.status === 'done' ? 'ok' : ''}`;
-      summaryEl.textContent = `${task.status || 'running'}${task.message ? ` ${task.message}` : ''}`;
-      stageEl.textContent = task.stage || '-';
-      platformEl.textContent = task.platform || '-';
-      layerEl.textContent = task.current_layer ? `${task.current_layer}/${task.total_layers}` : '-';
-      rateEl.textContent = task.speed_bps ? `${formatBytes(task.speed_bps)}/s${task.eta_seconds ? `, ETA ${task.eta_seconds}s` : ''}` : '-';
-
-      outputsEl.innerHTML = '';
-      (task.output_files || []).forEach((file) => {
-        const item = document.createElement('div');
-        item.className = 'result-item';
-        item.textContent = file;
-        outputsEl.appendChild(item);
-      });
-      if (task.platform_index_path) {
-        const item = document.createElement('div');
-        item.className = 'result-item';
-        item.textContent = `Index: ${task.platform_index_path}`;
-        outputsEl.appendChild(item);
+    function loadSelectedImageList() {
+      const item = state.settings.image_lists.find((entry) => entry.id === $('syncImageList').value);
+      if (!item) return;
+      state.currentListID = item.id; state.listDirty = false;
+      $('syncImageListName').value = item.name; $('syncImages').value = item.content;
+      updateListState();
+    }
+    function updateListState() { $('listSaveState').textContent = state.listDirty ? '未保存修改' : '已持久化'; $('listSaveState').className = `tag${state.listDirty ? ' warn' : ' good'}`; }
+    $('syncImageList').addEventListener('change', async (event) => {
+      const nextID = event.target.value;
+      if (state.listDirty && !await askConfirm('放弃未保存修改', '切换清单会丢弃当前编辑框中尚未保存的内容，是否继续？')) {
+        event.target.value = state.currentListID;
+        return;
       }
-
-      commandsEl.innerHTML = '';
-      (task.docker_load_commands || []).forEach((cmd) => {
-        const item = document.createElement('div');
-        item.className = 'command-item';
-        const pre = document.createElement('pre');
-        pre.textContent = cmd;
-        item.appendChild(pre);
-        commandsEl.appendChild(item);
-      });
-
-      errorEl.textContent = task.error || '-';
-      errorEl.className = `result-item ${task.error ? 'err' : ''}`;
-    }
-
-    function clearStatus() {
-      progressBarEl.style.width = '0%';
-      summaryEl.className = 'lede';
-      stageEl.textContent = 'idle';
-      platformEl.textContent = '-';
-      layerEl.textContent = '-';
-      rateEl.textContent = '-';
-      outputsEl.innerHTML = '';
-      commandsEl.innerHTML = '';
-      errorEl.textContent = '-';
-      errorEl.className = 'result-item';
-    }
-
-    document.getElementById('inspect').addEventListener('click', async () => {
+      if (nextID) {
+        loadSelectedImageList();
+        return;
+      }
+      state.currentListID = '';
+      state.listDirty = true;
+      $('syncImageListName').value = '';
+      $('syncImages').value = '# 每行一个镜像\n';
+      updateListState();
+    });
+    ['syncImageListName','syncImages'].forEach((id) => $(id).addEventListener('input', () => { state.listDirty = true; updateListState(); }));
+    $('newImageList').addEventListener('click', async () => { if(state.listDirty&&!await askConfirm('放弃未保存修改','新建清单会清空当前未保存内容，是否继续？'))return;state.currentListID = ''; $('syncImageList').value = ''; $('syncImageListName').value = ''; $('syncImages').value = '# 每行一个镜像\n'; state.listDirty = true; updateListState(); });
+    $('saveImageList').addEventListener('click', async () => {
       try {
-        await inspect();
-      } catch (error) {
-        summaryEl.textContent = error.message;
-        errorEl.textContent = error.message;
-      }
+        const payload = { name: $('syncImageListName').value.trim(), content: $('syncImages').value };
+        const method = state.currentListID ? 'PUT' : 'POST'; const suffix = state.currentListID ? `/${encodeURIComponent(state.currentListID)}` : '';
+        const saved = await api(`/api/settings/image-lists${suffix}`, { method, body: payload });
+        state.currentListID = saved.id; state.listDirty = false; toast('镜像清单已保存'); await loadSettings({ list: saved.id }); updateListState();
+      } catch (error) { toast(error.message, true); }
+    });
+    $('deleteImageList').addEventListener('click', async () => {
+      if (!state.currentListID || !await askConfirm('删除镜像清单', '只删除清单记录，不会删除任何镜像或 tar。')) return;
+      try { await api(`/api/settings/image-lists/${encodeURIComponent(state.currentListID)}`, { method: 'DELETE' }); state.currentListID = ''; state.listDirty = false; $('syncImages').value = ''; await loadSettings(); toast('清单已删除'); } catch (error) { toast(error.message, true); }
     });
 
-    document.getElementById('export').addEventListener('click', async () => {
-      try {
-        await startExport();
-      } catch (error) {
-        summaryEl.textContent = error.message;
-        errorEl.textContent = error.message;
-      }
+    $('syncSourceRegistry').addEventListener('change', () => fillCredentialSelect('syncSourceCredential', $('syncSourceRegistry').value));
+    $('syncTargetRegistry').addEventListener('change', () => fillCredentialSelect('syncTargetCredential', $('syncTargetRegistry').value));
+    $('harborRegistry').addEventListener('change', () => { fillCredentialSelect('harborCredential', $('harborRegistry').value); resetHarborBrowse(); });
+    $('harborCredential').addEventListener('change', resetHarborBrowse);
+    $('harborRemote').addEventListener('change', resetHarborBrowse);
+    $('exportRegistry').addEventListener('change', () => { fillCredentialSelect('exportCredential', $('exportRegistry').value); updateExportRegistryMode(); invalidateExportInspection(); });
+    $('syncTargetType').addEventListener('change', updateTargetType);
+    function updateTargetType() {
+      const localTar = $('syncTargetType').value === 'local_tar';
+      $('syncTargetRegistryWrap').classList.toggle('hidden', localTar); $('syncTargetCredentialWrap').classList.toggle('hidden', localTar); $('syncOutputRootWrap').classList.toggle('hidden', !localTar);
+    }
+    updateTargetType();
+
+    $('setDefaultRemote').addEventListener('click', async () => {
+      const id = $('syncRemote').value; if (!id) return toast('先选择执行机', true);
+      try { await api('/api/settings/default-remote', { method: 'PUT', body: { id } }); await loadSettings({ remote: id }); toast('默认执行机已更新'); } catch (error) { toast(error.message, true); }
     });
+    $('probeSyncStorage').addEventListener('click', async () => {
+      const id = $('syncRemote').value; if (!id) return toast('先选择执行机', true);
+      try { const disks = await api(`/api/remotes/${encodeURIComponent(id)}/storage`); const best = disks.find((disk) => disk.recommended) || disks[0]; $('syncStorageHint').classList.remove('hidden'); $('syncStorageHint').textContent = best ? `推荐 ${best.path} · 可用 ${formatBytes(best.available_bytes)} / ${formatBytes(best.total_bytes)}` : '没有可写分区'; } catch (error) { toast(error.message, true); }
+    });
+    $('startSync').addEventListener('click', async () => {
+      try {
+        const payload = {
+          remote_id: $('syncRemote').value, source_registry_id: $('syncSourceRegistry').value, source_credential_id: $('syncSourceCredential').value,
+          target_type: $('syncTargetType').value, target_registry_id: $('syncTargetRegistry').value, target_credential_id: $('syncTargetCredential').value,
+          image_list_id: state.currentListID, images_content: $('syncImages').value, engine: $('syncEngine').value, output_root: $('syncOutputRoot').value.trim()
+        };
+        const response = await api('/api/sync', { method: 'POST', body: payload }); subscribeTask(response.task_id, '镜像同步'); toast('同步任务已提交到执行机');
+      } catch (error) { toast(error.message, true); }
+    });
+
+    function renderSettingsLists() {
+      renderRegistryList(); renderCredentialList(); renderRemoteList();
+    }
+    function rowActions(edit, remove, extra) {
+      const wrap = node('div', { class: 'row-actions' });
+      if (extra) wrap.appendChild(node('button', { class: 'btn secondary small', type: 'button', onclick: extra, text: '测试' }));
+      wrap.append(node('button', { class: 'btn secondary small', type: 'button', onclick: edit, text: '编辑' }), node('button', { class: 'btn danger small', type: 'button', onclick: remove, text: '删除' })); return wrap;
+    }
+    function renderRegistryList() {
+      clear($('registryList'));
+      state.settings.registries.forEach((item) => {
+        const info = node('div', {}, node('strong', { text: item.name }), node('small', { text: `${item.kind} · ${item.endpoint}${item.namespace ? ` / ${item.namespace}` : ''}` }));
+        $('registryList').appendChild(node('div', { class: 'card-row' }, info, rowActions(() => editRegistry(item), () => deleteRegistry(item))));
+      });
+    }
+    function editRegistry(item) { $('registryID').value=item.id; $('registryName').value=item.name; $('registryKind').value=item.kind; $('registryEndpoint').value=item.endpoint; $('registryNamespace').value=item.namespace||''; $('registryProxy').value=item.proxy||''; $('registryInsecure').checked=Boolean(item.insecure); }
+    async function deleteRegistry(item) { if (!await askConfirm('删除 Registry 配置', `删除 ${item.name} 以及其全部账号记录？`)) return; try { await api(`/api/settings/registries/${encodeURIComponent(item.id)}`, {method:'DELETE'}); await loadSettings(); toast('站点记录已删除'); } catch(error){toast(error.message,true);} }
+    $('registryForm').addEventListener('submit', async (event) => { event.preventDefault(); try { const id=$('registryID').value; const body={name:$('registryName').value.trim(),kind:$('registryKind').value,endpoint:$('registryEndpoint').value.trim(),namespace:$('registryNamespace').value.trim(),proxy:$('registryProxy').value.trim(),insecure:$('registryInsecure').checked}; await api(`/api/settings/registries${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body}); resetRegistryForm(); await loadSettings(); toast('站点配置已保存'); } catch(error){toast(error.message,true);} });
+    function resetRegistryForm(){ $('registryForm').reset(); $('registryID').value=''; $('registryKind').value='registry'; }
+    $('resetRegistryForm').addEventListener('click', resetRegistryForm);
+
+    function renderCredentialList(){ clear($('credentialList')); state.settings.credentials.forEach((item)=>{ const registry=state.settings.registries.find((entry)=>entry.id===item.registry_id); const info=node('div',{},node('strong',{text:item.name}),node('small',{text:`${registry?registry.name:'missing'} · ${item.username} · ${item.has_secret?'secret saved':'no secret'}`})); $('credentialList').appendChild(node('div',{class:'card-row'},info,rowActions(()=>editCredential(item),()=>deleteCredential(item)))); }); }
+    function editCredential(item){ $('credentialID').value=item.id; $('credentialRegistry').value=item.registry_id; $('credentialName').value=item.name; $('credentialUsername').value=item.username; $('credentialSecret').value=''; $('credentialClearSecret').checked=false; }
+    async function deleteCredential(item){ if(!await askConfirm('删除账号',`删除 ${item.name} 的已保存凭据？`))return; try{await api(`/api/settings/credentials/${encodeURIComponent(item.id)}`,{method:'DELETE'});await loadSettings();toast('账号已删除');}catch(error){toast(error.message,true);} }
+    $('credentialForm').addEventListener('submit',async(event)=>{event.preventDefault();try{const id=$('credentialID').value;const body={registry_id:$('credentialRegistry').value,name:$('credentialName').value.trim(),username:$('credentialUsername').value.trim()};if($('credentialClearSecret').checked)body.secret='';else if($('credentialSecret').value)body.secret=$('credentialSecret').value;await api(`/api/settings/credentials${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetCredentialForm();await loadSettings();toast('账号已保存');}catch(error){toast(error.message,true);}});
+    function resetCredentialForm(){ $('credentialForm').reset(); $('credentialID').value=''; }
+    $('resetCredentialForm').addEventListener('click',resetCredentialForm);
+
+    function renderRemoteList(){ clear($('remoteList'));state.settings.remotes.forEach((item)=>{const badges=node('small',{text:`${item.user}@${item.address}:${item.port} · ${item.auth_method} · ${item.has_secret?'secret saved':'no secret'}`});const info=node('div',{},node('strong',{text:item.name}),badges,item.id===state.settings.default_remote_id?node('span',{class:'tag good',text:'默认'}):null);$('remoteList').appendChild(node('div',{class:'card-row'},info,rowActions(()=>editRemote(item),()=>deleteRemote(item),()=>testRemote(item))));}); }
+    function editRemote(item){$('remoteID').value=item.id;$('remoteName').value=item.name;$('remoteAddress').value=item.address;$('remotePort').value=item.port||22;$('remoteUser').value=item.user;$('remoteAuth').value=item.auth_method;$('remoteKeyPath').value=item.key_path||'';$('remoteSecret').value='';$('remoteClearSecret').checked=false;$('remoteWorkspace').value=item.workspace;$('remoteDiaPath').value=item.dia_path||'';$('remoteStorageRoots').value=(item.storage_roots||[]).join('\n');}
+    async function deleteRemote(item){if(!await askConfirm('删除执行机',`删除 ${item.name} 的 SSH 记录和 secret？`))return;try{await api(`/api/settings/remotes/${encodeURIComponent(item.id)}`,{method:'DELETE'});await loadSettings();toast('执行机已删除');}catch(error){toast(error.message,true);}}
+    async function testRemote(item){try{let response;try{response=await api(`/api/remotes/${encodeURIComponent(item.id)}/test`,{method:'POST',body:{}});}catch(error){if(error.status===409&&error.payload&&error.payload.needs_confirmation){const fingerprint=error.payload.fingerprint;const accepted=await askConfirm('确认 SSH Host Key',`${item.name}\n${fingerprint}\n\n请与服务器管理员提供的指纹核对。`);if(!accepted)return;response=await api(`/api/remotes/${encodeURIComponent(item.id)}/test`,{method:'POST',body:{fingerprint}});}else throw error;}toast(`连接成功：${response.info.os}/${response.info.architecture} · dia ${response.info.version}`);await loadSettings();}catch(error){toast(error.message,true);}}
+    $('remoteForm').addEventListener('submit',async(event)=>{event.preventDefault();try{const id=$('remoteID').value;const body={name:$('remoteName').value.trim(),address:$('remoteAddress').value.trim(),port:Number($('remotePort').value||22),user:$('remoteUser').value.trim(),auth_method:$('remoteAuth').value,key_path:$('remoteKeyPath').value.trim(),workspace:$('remoteWorkspace').value.trim(),dia_path:$('remoteDiaPath').value.trim(),storage_roots:$('remoteStorageRoots').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};if($('remoteClearSecret').checked)body.secret='';else if($('remoteSecret').value)body.secret=$('remoteSecret').value;const saved=await api(`/api/settings/remotes${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetRemoteForm();await loadSettings({remote:saved.id});toast('执行机已保存，请执行连接测试');}catch(error){toast(error.message,true);}});
+    function resetRemoteForm(){$('remoteForm').reset();$('remoteID').value='';$('remotePort').value='22';$('remoteAuth').value='agent';$('remoteWorkspace').value='~/.local/share/dia';}
+    $('resetRemoteForm').addEventListener('click',resetRemoteForm);
+
+    function harborPayload(action){const route=$('harborRemote').value;return{registry_id:$('harborRegistry').value,credential_id:$('harborCredential').value,execution:route===LOCAL_HARBOR_EXECUTION?'local':'remote',remote_id:route===LOCAL_HARBOR_EXECUTION?'':route,action};}
+    async function harborAction(action){return api('/api/harbor',{method:'POST',body:harborPayload(action)});}
+    function resetHarborBrowse(){state.harborProjects=[];state.harborRepositories=[];state.harborArtifacts=[];state.harborProjectNextPage=0;state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborProject'));clear($('harborRepository'));clear($('artifactRows'));$('artifactCaption').textContent='选择项目和仓库后加载。';$('loadMoreProjects').disabled=true;$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}
+    function repositoryResourceName(item,project){const name=String(item.resource_name||item.name||'').replace(/^\/+|\/+$/g,'');const prefix=`${project}/`;return name.startsWith(prefix)?name.slice(prefix.length):name;}
+    $('harborHealth').addEventListener('click',async()=>{try{const result=await harborAction({action:'health'});$('harborHealthResult').classList.remove('hidden');$('harborHealthResult').textContent=`Harbor ${result.status} · ${(result.components||[]).map(item=>`${item.name}:${item.status}`).join(' · ')}`;}catch(error){toast(error.message,true);}});
+    $('loadProjects').addEventListener('click',()=>loadHarborProjects(false));
+    $('loadMoreProjects').addEventListener('click',()=>loadHarborProjects(true));
+    async function loadHarborProjects(append=false){try{const page=append?state.harborProjectNextPage:1;if(!page)return;const selected=$('harborProject').value;const result=await harborAction({action:'list_projects',page,page_size:100});state.harborProjects=append?mergeUnique(state.harborProjects,result.items||[],item=>item.name):(result.items||[]);fillSelect($('harborProject'),state.harborProjects,'选择项目',(item)=>`${item.name} · ${item.repo_count} repos`,selected,(item)=>item.name);state.harborProjectNextPage=result.next_page||0;$('loadMoreProjects').disabled=!state.harborProjectNextPage;if(!append){state.harborRepositories=[];state.harborArtifacts=[];state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborRepository'));clear($('artifactRows'));$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}$('artifactCaption').textContent='选择项目和仓库后加载。';toast(`已加载 ${state.harborProjects.length} / ${result.total||state.harborProjects.length} 个项目`);}catch(error){toast(error.message,true);}}
+    $('harborProject').addEventListener('change',()=>loadHarborRepositories(false));
+    $('loadMoreRepositories').addEventListener('click',()=>loadHarborRepositories(true));
+    async function loadHarborRepositories(append=false){const project=$('harborProject').value;if(!project)return;try{const page=append?state.harborRepositoryNextPage:1;if(!page)return;const selected=$('harborRepository').value;const result=await harborAction({action:'list_repositories',project,page,page_size:100});state.harborRepositories=append?mergeUnique(state.harborRepositories,result.items||[],item=>repositoryResourceName(item,project)):(result.items||[]);fillSelect($('harborRepository'),state.harborRepositories,'选择仓库',(item)=>`${item.name} · ${item.artifact_count}`,selected,(item)=>repositoryResourceName(item,project));state.harborRepositoryNextPage=result.next_page||0;$('loadMoreRepositories').disabled=!state.harborRepositoryNextPage;if(!append){state.harborArtifacts=[];state.harborArtifactNextPage=0;clear($('artifactRows'));$('loadMoreArtifacts').disabled=true;$('artifactCaption').textContent='选择仓库后加载。';}}catch(error){toast(error.message,true);}}
+    $('harborRepository').addEventListener('change',()=>loadArtifacts(false));
+    $('loadArtifacts').addEventListener('click',()=>loadArtifacts(false));
+    $('loadMoreArtifacts').addEventListener('click',()=>loadArtifacts(true));
+    async function loadArtifacts(append=false){const project=$('harborProject').value,repository=$('harborRepository').value;if(!project||!repository)return toast('先选择项目和仓库',true);try{const page=append?state.harborArtifactNextPage:1;if(!page)return;const result=await harborAction({action:'list_artifacts',project,repository,query:$('harborQuery').value.trim(),page,page_size:100});state.harborArtifacts=append?mergeUnique(state.harborArtifacts,result.items||[],item=>item.digest):(result.items||[]);renderArtifacts(state.harborArtifacts);state.harborArtifactNextPage=result.next_page||0;$('loadMoreArtifacts').disabled=!state.harborArtifactNextPage;$('artifactCaption').textContent=`${project} / ${repository} · ${state.harborArtifacts.length} / ${result.total||state.harborArtifacts.length} artifacts`;}catch(error){toast(error.message,true);}}
+    function renderArtifacts(items){clear($('artifactRows'));items.forEach((item)=>{const tags=node('div',{class:'row-actions'});(item.tags||[]).forEach((tag)=>tags.appendChild(node('button',{class:'tag tag-delete',type:'button',text:`${tag.name} ×`,title:`删除 Tag ${tag.name}`,onclick:()=>deleteArtifactTag(item,tag)})));if(!(item.tags||[]).length)tags.appendChild(node('small',{class:'muted',text:'untagged'}));const digest=node('div',{},node('div',{class:'mono',text:item.digest}),tags);const actions=node('div',{class:'row-actions'});actions.appendChild(node('button',{class:'btn secondary small',text:'加 Tag',onclick:()=>createArtifactTag(item)}));actions.appendChild(node('button',{class:'btn danger small',text:'删除',onclick:()=>deleteArtifact(item)}));$('artifactRows').appendChild(node('tr',{},node('td',{},digest),node('td',{text:item.type||item.media_type||'-'}),node('td',{text:formatBytes(item.size)}),node('td',{text:formatTime(item.push_time)}),node('td',{},actions)));});}
+    async function createArtifactTag(item){const tag=window.prompt('新 Tag 名称');if(!tag)return;try{await harborAction({action:'create_tag',project:$('harborProject').value,repository:$('harborRepository').value,reference:item.digest,tag:tag.trim()});await loadArtifacts();toast('Tag 已创建');}catch(error){toast(error.message,true);}}
+    async function deleteArtifactTag(item,tag){if(!await askConfirm('删除 Harbor Tag',`删除 ${tag.name}？制品内容只有在没有其他引用并执行 Harbor GC 后才会释放。`))return;try{await harborAction({action:'delete_tag',project:$('harborProject').value,repository:$('harborRepository').value,reference:item.digest,tag:tag.name});await loadArtifacts();toast('Tag 已删除');}catch(error){toast(error.message,true);}}
+    async function deleteArtifact(item){if(!await askConfirm('删除 Harbor 制品',`删除 ${item.digest} 及其所有 tags？此操作不可撤销。`))return;try{await harborAction({action:'delete_artifact',project:$('harborProject').value,repository:$('harborRepository').value,reference:item.digest});await loadArtifacts();toast('制品已删除');}catch(error){toast(error.message,true);}}
+    $('createProject').addEventListener('click',async()=>{const name=$('newProjectName').value.trim();if(!name)return toast('输入项目名称',true);try{await harborAction({action:'create_project',project:name,public:$('newProjectPublic').checked});$('newProjectName').value='';await loadHarborProjects();toast('项目已创建');}catch(error){toast(error.message,true);}});
+    $('deleteProject').addEventListener('click',async()=>{const project=$('harborProject').value;if(!project||!await askConfirm('删除 Harbor 项目',`永久删除项目 ${project}？项目必须为空且没有待处理任务。`))return;try{await harborAction({action:'delete_project',project});await loadHarborProjects();toast('项目已删除');}catch(error){toast(error.message,true);}});
+    $('deleteRepository').addEventListener('click',async()=>{const project=$('harborProject').value,repository=$('harborRepository').value;if(!project||!repository||!await askConfirm('删除 Harbor 仓库',`永久删除 ${project}/${repository}？`))return;try{await harborAction({action:'delete_repository',project,repository});await loadHarborRepositories();toast('仓库已删除');}catch(error){toast(error.message,true);}});
+
+    $('loadFiles').addEventListener('click',loadRemoteFiles); $('fileRemote').addEventListener('change',()=>{clear($('fileRows'));clear($('storageCards'));});
+    async function loadRemoteFiles(pathOverride){const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);const remotePath=typeof pathOverride==='string'?pathOverride:$('filePath').value.trim();try{const entries=await api(`/api/remotes/${encodeURIComponent(remote)}/files?path=${encodeURIComponent(remotePath)}`);if(remotePath)$('filePath').value=remotePath;renderFiles(entries);}catch(error){toast(error.message,true);}}
+    function renderFiles(entries){clear($('fileRows'));entries.forEach((item)=>{const name=node('div',{},node('strong',{text:item.name}),node('small',{class:'muted mono',text:item.path}));const actions=node('div',{class:'row-actions'});if(item.directory){actions.appendChild(node('button',{class:'btn secondary small',text:'打开',onclick:()=>loadRemoteFiles(item.path)}));}else{const url=`/api/remotes/${encodeURIComponent($('fileRemote').value)}/download?path=${encodeURIComponent(item.path)}`;actions.appendChild(node('button',{class:'btn secondary small',text:'下载',onclick:()=>requestRemoteDownload(item,url)}),node('button',{class:'btn danger small',text:'删除',onclick:()=>deleteRemoteArchive(item)}));}
+      const row=node('tr',{class:item.directory?'':'file-row',draggable:item.directory?'false':'true'},node('td',{},name),node('td',{text:item.directory?'目录':formatBytes(item.size)}),node('td',{text:formatTime(item.modified_at)}),node('td',{},actions));if(!item.directory)row.addEventListener('dragstart',(event)=>{const remote=state.settings.remotes.find((entry)=>entry.id===$('fileRemote').value);if(!window.confirm(`从 ${remote?remote.name:'执行机'} 传输 ${item.name}（${formatBytes(item.size)}）到本机？\n\n取消后不会读取文件内容。`)){event.preventDefault();return;}const url=new URL(`/api/remotes/${encodeURIComponent($('fileRemote').value)}/download?path=${encodeURIComponent(item.path)}`,window.location.href).href;event.dataTransfer.setData('DownloadURL',`application/x-tar:${item.name}:${url}`);event.dataTransfer.setData('text/uri-list',url);});$('fileRows').appendChild(row);});}
+    async function requestRemoteDownload(item,url){const remote=state.settings.remotes.find((entry)=>entry.id===$('fileRemote').value);if(!await askConfirm('传输远程文件',`从 ${remote?remote.name:'执行机'} 下载 ${item.name}（${formatBytes(item.size)}）到本机？取消后不会读取文件内容。`))return;const link=node('a',{href:url,download:item.name});document.body.appendChild(link);link.click();link.remove();}
+    $('fileUp').addEventListener('click',()=>{const value=$('filePath').value.replace(/\/+$/,'');const index=value.lastIndexOf('/');const parent=index>0?value.slice(0,index):'/';$('filePath').value=parent;loadRemoteFiles(parent);});
+    $('loadStorage').addEventListener('click',async()=>{const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);try{const items=await api(`/api/remotes/${encodeURIComponent(remote)}/storage`);clear($('storageCards'));items.forEach((item)=>$('storageCards').appendChild(node('div',{class:'task-stat'},node('span',{text:item.recommended?'recommended':'storage'}),node('strong',{text:item.path}),node('small',{class:'muted',text:`${formatBytes(item.available_bytes)} free / ${formatBytes(item.total_bytes)}`}))));}catch(error){toast(error.message,true);}});
+    async function deleteRemoteArchive(item){if(!await askConfirm('删除远程文件',`在执行机上永久删除 ${item.path}？`))return;try{await api(`/api/remotes/${encodeURIComponent($('fileRemote').value)}/files`,{method:'DELETE',body:{path:item.path}});await loadRemoteFiles();toast('远程文件已删除');}catch(error){toast(error.message,true);}}
+
+    $('exportImage').value=bootstrap.image||'alpine:latest';$('exportOutput').value=bootstrap.output||'';$('exportProxy').value=bootstrap.proxy||'';$('exportUsername').value=bootstrap.username||'';$('exportInsecure').checked=Boolean(bootstrap.insecure);
+    $('exportSavedPasswordWrap').classList.toggle('hidden',!bootstrap.has_saved_password);$('exportUseSavedPassword').checked=Boolean(bootstrap.has_saved_password);$('exportSavedProxyWrap').classList.toggle('hidden',!bootstrap.has_saved_proxy_credentials);$('exportUseSavedProxy').checked=Boolean(bootstrap.has_saved_proxy_credentials);
+    function exportPayload(){return{image:$('exportImage').value.trim(),output:$('exportOutput').value.trim(),proxy:$('exportProxy').value.trim(),use_saved_proxy_credentials:$('exportUseSavedProxy').checked,username:$('exportUsername').value.trim(),password:$('exportPassword').value,use_saved_password:$('exportUseSavedPassword').checked,insecure:$('exportInsecure').checked,registry_id:$('exportRegistry').value,credential_id:$('exportCredential').value};}
+    function exportRequestIdentity(){const payload=exportPayload();delete payload.output;delete payload.password;return JSON.stringify({...payload,password_present:Boolean($('exportPassword').value)});}
+    function selectedExportManifests(){return new Set(Array.from($('exportPlatforms').querySelectorAll('input:checked')).map(item=>item.dataset.manifestRef));}
+    function invalidateExportInspection({imageChanged=false}={}){state.exportInspectionKey='';state.exportInspectSequence+=1;if(imageChanged&&state.exportOutputAutomatic)$('exportOutput').value='';}
+    function updateExportRegistryMode(){const saved=Boolean($('exportRegistry').value);['exportProxy','exportUseSavedProxy','exportUsername','exportPassword','exportUseSavedPassword','exportInsecure'].forEach((id)=>$(id).disabled=saved);}
+    $('exportOutput').addEventListener('input',()=>{state.exportOutputAutomatic=false;});
+    $('exportImage').addEventListener('input',()=>invalidateExportInspection({imageChanged:true}));
+    ['exportProxy','exportUsername','exportPassword'].forEach((id)=>$(id).addEventListener('input',()=>invalidateExportInspection()));
+    $('exportInsecure').addEventListener('change',()=>invalidateExportInspection());
+    $('exportUseSavedPassword').addEventListener('change',()=>invalidateExportInspection());
+    $('exportUseSavedProxy').addEventListener('change',()=>invalidateExportInspection());
+    $('exportCredential').addEventListener('change',()=>invalidateExportInspection());
+    $('inspectExport').addEventListener('click',()=>inspectExport(state.exportPlatforms.length?selectedExportManifests():null));
+    async function inspectExport(preservedSelection=null){const requestIdentity=exportRequestIdentity(),sequence=++state.exportInspectSequence;try{const payload=exportPayload();delete payload.output;const result=await api('/api/inspect',{method:'POST',body:payload});if(sequence!==state.exportInspectSequence||requestIdentity!==exportRequestIdentity())throw new Error('检查期间输入已改变，请重新检查');if(state.exportOutputAutomatic||!$('exportOutput').value.trim()){$('exportOutput').value=result.default_output;state.exportOutputAutomatic=true;}state.exportPlatforms=result.platforms||[];const available=new Set(state.exportPlatforms.map((platform)=>platform.manifest_ref));const matched=preservedSelection?new Set(Array.from(preservedSelection).filter((value)=>available.has(value))):null;const keepSelection=matched&&matched.size>0;clear($('exportPlatforms'));state.exportPlatforms.forEach((platform)=>{const checkbox=node('input',{type:'checkbox'});checkbox.checked=keepSelection?matched.has(platform.manifest_ref):true;checkbox.dataset.manifestRef=platform.manifest_ref;const label=node('label',{class:'platform-option'},checkbox,node('span',{text:`${platform.display_index}. ${platform.label}`}));$('exportPlatforms').appendChild(label);});state.exportInspectionKey=requestIdentity;toast(`发现 ${state.exportPlatforms.length} 个架构`);return result;}catch(error){toast(error.message,true);throw error;}}
+    $('startExport').addEventListener('click',async()=>{try{if(!state.exportPlatforms.length)await inspectExport();else if(state.exportInspectionKey!==exportRequestIdentity())await inspectExport(selectedExportManifests());const selected=Array.from(selectedExportManifests());if(!selected.length)throw new Error('至少选择一个平台');const response=await api('/api/export',{method:'POST',body:{...exportPayload(),selected}});subscribeTask(response.task_id,'单镜像导出');}catch(error){toast(error.message,true);}});
+    updateExportRegistryMode();
+
+    function subscribeTask(taskID,title){state.currentTaskID=taskID;$('taskTitle').textContent=title;$('cancelTask').disabled=false;if(state.taskStream)state.taskStream.close();if(state.taskPollTimer)clearTimeout(state.taskPollTimer);state.taskStream=new EventSource(`/api/tasks/${encodeURIComponent(taskID)}/events`);state.taskStream.onmessage=(event)=>renderTask(JSON.parse(event.data));state.taskStream.onerror=()=>{state.taskStream.close();state.taskStream=null;pollTask(taskID);};}
+    async function pollTask(taskID){try{const task=await api(`/api/tasks/${encodeURIComponent(taskID)}`);renderTask(task);if(!isTerminal(task.status))state.taskPollTimer=setTimeout(()=>pollTask(taskID),1500);}catch(error){$('taskSummary').textContent=`任务状态读取失败：${error.message}`;state.taskPollTimer=setTimeout(()=>pollTask(taskID),2500);}}
+    function isTerminal(status){return['done','failed','canceled'].includes(status);}
+    function renderTask(task){const total=Number(task.bytes_total||0),done=Number(task.bytes_done||0);$('taskProgress').style.width=`${total?Math.min(100,done/total*100):(task.status==='done'?100:0)}%`;$('taskSummary').textContent=`${task.status||'running'}${task.message?` · ${task.message}`:''}`;$('taskSummary').className=task.status==='done'?'status-ok':task.status==='failed'?'status-bad':'';$('taskStage').textContent=task.stage||'-';$('taskPlatform').textContent=task.platform||'-';$('taskItem').textContent=task.total_images?`${task.current_image||0}/${task.total_images} images${task.total_layers?` · ${task.current_layer||0}/${task.total_layers} blobs`:''}`:task.total_layers?`${task.current_layer||0}/${task.total_layers}`:'-';$('taskRate').textContent=task.speed_bps?`${formatBytes(task.speed_bps)}/s${task.eta_seconds?` · ETA ${task.eta_seconds}s`:''}`:'-';clear($('taskOutputs'));(task.output_files||[]).forEach((value)=>$('taskOutputs').appendChild(node('div',{class:'task-item ok',text:value})));if(task.sync_result)(task.sync_result.items||[]).forEach((item)=>$('taskOutputs').appendChild(node('div',{class:`task-item ${item.status==='done'?'ok':'err'}`,text:`${item.status} · ${item.source}${item.target?` → ${item.target}`:''}${item.error?` · ${item.error}`:''}`})));clear($('taskCommands'));(task.docker_load_commands||[]).forEach((value)=>$('taskCommands').appendChild(node('pre',{class:'task-item mono',text:value})));$('taskError').classList.toggle('hidden',!task.error);$('taskError').textContent=task.error||'';if(isTerminal(task.status)){if(state.taskStream){state.taskStream.close();state.taskStream=null;}$('cancelTask').disabled=true;}}
+    $('cancelTask').addEventListener('click',async()=>{if(!state.currentTaskID||!await askConfirm('取消远程任务','当前网络请求会被中断；已完成的最终文件保持不变，未完成的临时文件不会替换正式 tar。'))return;try{await api(`/api/tasks/${encodeURIComponent(state.currentTaskID)}/cancel`,{method:'POST'});toast('已发送取消请求');}catch(error){toast(error.message,true);}});
+
+    function askConfirm(title,text){return new Promise((resolve)=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmText').textContent=text;const finish=(value)=>{dialog.close();$('confirmYes').onclick=null;$('confirmNo').onclick=null;resolve(value);};$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.showModal();});}
+
+    window.addEventListener('beforeunload',(event)=>{if(state.listDirty){event.preventDefault();event.returnValue='';}});
+
+    loadSettings().catch((error)=>toast(`配置加载失败：${error.message}`,true));
   </script>
 </body>
 </html>

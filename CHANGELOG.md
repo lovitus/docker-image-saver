@@ -1,0 +1,46 @@
+# Changelog
+
+## Unreleased
+
+## v1.3.0 - 2026-08-10
+
+### Added
+
+- Persistent Registry and Harbor profiles with multiple encrypted accounts.
+- Persistent SSH execution machines, strict host-key confirmation, and remembered default execution machine.
+- Editable persistent image lists with optional source-to-target mappings.
+- Native streaming Registry-to-Registry synchronization without Docker.
+- Optional `skopeo` engine with compatibility checks and automatic native fallback in `auto` mode.
+- Remote `local_tar` jobs that select the writable filesystem with the most available space.
+- SSH stdio remote agent with checksum-verified release bootstrap for Linux/macOS execution machines.
+- SSH-routed Harbor project, repository, artifact, and tag management.
+- Direct Harbor management from the controller with an explicit local/remote access-path selector.
+- Metadata-only remote file browser with explicit confirmed file transfer.
+- Encrypted AES-256-GCM secret vault and loopback GUI session protection.
+- Repository-level workflow gate: local work is syntax-only, while tests, race detection, cross-builds, packaging, and releases run exclusively in GitHub Actions.
+
+### Changed
+
+- GUI redesigned as a five-page control deck for sync, Harbor, remote files, single export, and connection settings.
+- Release CI now runs module verification, `go vet`, and race-enabled tests before cross-compilation.
+- Registry copy preserves the source manifest digest algorithm and reports per-image blob progress.
+- Local and remote downloads use atomic final replacement.
+- Harbor resource selectors use stable names, support nested repositories, and paginate large result sets.
+- Multi-platform archives use platform-qualified Docker tags so loading one platform does not overwrite another platform's tag.
+
+### Fixed
+
+- Startup GUI credentials remain usable without exposing passwords in HTML.
+- Local GUI export cancellation now cancels active Registry requests.
+- Stale inspect results cannot overwrite a newer image/account selection.
+- Concurrent and aliased output paths are reserved before export.
+- Remote symlink deletion removes the link rather than its target.
+- Stale or oversized partial downloads retry safely from zero.
+- Unsafe repository/namespace path rewriting and mismatched explicit Registry hosts are rejected.
+- Child-process diagnostic output and all in-memory Registry/Harbor responses are bounded.
+- Compressed layer descriptors are verified through underlying EOF even when a decompressor finishes first.
+- Split multi-platform tar archives now preserve distinct `RepoTags` such as `tag-linux-amd64` and `tag-linux-arm64-v8`.
+
+## v1.2.0
+
+- Added the embedded local GUI, zstd layer support, byte/rate/ETA progress, bounded blob reuse, and stricter docker-load archive validation.

@@ -1,8 +1,12 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseImageRef(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
 	tests := []struct {
 		in           string
 		registry     string
@@ -29,13 +33,13 @@ func TestParseImageRef(t *testing.T) {
 			displayTag:  "ghcr.io/example/app:v1",
 		},
 		{
-			in:           "docker.io/library/busybox@sha256:abc",
+			in:           "docker.io/library/busybox@" + digest,
 			registry:     dockerHubRegistryAlias,
 			repository:   "library/busybox",
 			tag:          "",
 			displayRepo:  "busybox",
-			displayTag:   "busybox:latest",
-			expectDigest: "sha256:abc",
+			displayTag:   "busybox@" + digest,
+			expectDigest: digest,
 		},
 	}
 
@@ -55,6 +59,28 @@ func TestParseImageRef(t *testing.T) {
 		}
 		if tt.expectDigest != "" && ref.Digest != tt.expectDigest {
 			t.Fatalf("digest mismatch for %q: got %q want %q", tt.in, ref.Digest, tt.expectDigest)
+		}
+	}
+}
+
+func TestParseImageRefRejectsUnsafeOrMalformedReferences(t *testing.T) {
+	invalid := []string{
+		"foo/../bar:latest",
+		"foo//bar:latest",
+		"foo/:latest",
+		"foo:",
+		"foo@",
+		"foo@@sha256:" + strings.Repeat("a", 64),
+		"foo bar:latest",
+		"foo\\bar:latest",
+		"foo?query:latest",
+		"UpperCase/repo:latest",
+		"foo@sha256:abc",
+		"foo@md5:" + strings.Repeat("a", 32),
+	}
+	for _, value := range invalid {
+		if _, err := parseImageRef(value); err == nil {
+			t.Errorf("parseImageRef(%q) unexpectedly succeeded", value)
 		}
 	}
 }
@@ -117,5 +143,26 @@ func TestParseCLIPreservesSaveGUIImage(t *testing.T) {
 	}
 	if opts.Image != "gui" {
 		t.Fatalf("unexpected image: %q", opts.Image)
+	}
+}
+
+func TestDefaultOutputTarUsesFriendlyOfficialImageName(t *testing.T) {
+	got, err := defaultOutputTar("alpine:latest")
+	if err != nil {
+		t.Fatalf("default output: %v", err)
+	}
+	if got != "alpine_latest.tar" {
+		t.Fatalf("unexpected official image output: %q", got)
+	}
+}
+
+func TestDefaultOutputTarUsesDigestSuffix(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	got, err := defaultOutputTar("example/app@sha256:" + digest)
+	if err != nil {
+		t.Fatalf("default output: %v", err)
+	}
+	if got != "example_app_sha256_"+digest+".tar" {
+		t.Fatalf("unexpected digest output: %q", got)
 	}
 }

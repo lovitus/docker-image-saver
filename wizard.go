@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 func runWizard(version string) error {
@@ -44,7 +46,7 @@ func runWizard(version string) error {
 		in,
 		out,
 		"3) Proxy URL (optional)",
-		faintText("(socks5://127.0.0.1:7897 or http://127.0.0.1:7890)"),
+		faintText("(socks5://127.0.0.1:7897, socks5h://127.0.0.1:7897, or http://127.0.0.1:7890)"),
 	)
 	if err != nil {
 		return err
@@ -53,7 +55,7 @@ func runWizard(version string) error {
 	if err != nil {
 		return err
 	}
-	password, err := promptWithDefault(in, out, "5) Registry password (optional)", strings.TrimSpace(os.Getenv("DIA_REGISTRY_PASSWORD")))
+	password, err := promptPassword(in, out, "5) Registry password (optional)", os.Getenv("DIA_REGISTRY_PASSWORD"), int(os.Stdin.Fd()))
 	if err != nil {
 		return err
 	}
@@ -109,7 +111,7 @@ func runWizard(version string) error {
 }
 
 func promptWithDefault(in *bufio.Reader, out io.Writer, label, defaultValue string) (string, error) {
-	if strings.TrimSpace(defaultValue) == "" {
+	if defaultValue == "" {
 		fmt.Fprintf(out, "%s: ", label)
 	} else {
 		fmt.Fprintf(out, "%s [%s]: ", label, defaultValue)
@@ -136,6 +138,34 @@ func promptWithHint(in *bufio.Reader, out io.Writer, label, hint string) (string
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+func promptPassword(in *bufio.Reader, out io.Writer, label, defaultValue string, terminalFD int) (string, error) {
+	if defaultValue == "" {
+		fmt.Fprintf(out, "%s: ", label)
+	} else {
+		fmt.Fprintf(out, "%s [press Enter to use DIA_REGISTRY_PASSWORD]: ", label)
+	}
+	if terminalFD >= 0 && term.IsTerminal(terminalFD) {
+		value, err := term.ReadPassword(terminalFD)
+		fmt.Fprintln(out)
+		if err != nil {
+			return "", err
+		}
+		if len(value) == 0 {
+			return defaultValue, nil
+		}
+		return string(value), nil
+	}
+	line, err := in.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	if line == "" {
+		return defaultValue, nil
+	}
+	return line, nil
 }
 
 func promptRequiredWithDefault(in *bufio.Reader, out io.Writer, label, defaultValue string) (string, error) {

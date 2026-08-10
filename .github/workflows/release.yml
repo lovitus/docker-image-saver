@@ -22,8 +22,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check source syntax and reproducibility
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          awk '/<script>/{flag=1;next}/<\/script>/{flag=0}flag' web/index.html | node --check -
+          go mod verify
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
       - name: Test
-        run: go test ./...
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test -race -count=1 ./...
+          go test -shuffle=on -count=3 ./...
 
       - name: Build cross-platform binaries
         env:
@@ -59,6 +72,20 @@ jobs:
           name: dia-binaries
           path: dist/*
 
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          awk -v version="$VERSION" '
+            index($0, "## " version) == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -67,7 +94,8 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
             gh release upload "$VERSION" dist/* --clobber
           else
-            gh release create "$VERSION" dist/* --title "$VERSION" --generate-notes
+            gh release create "$VERSION" dist/* --title "$VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
