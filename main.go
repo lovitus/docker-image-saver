@@ -25,6 +25,13 @@ type cliOptions struct {
 }
 
 func main() {
+	if isRemoteAgentCommand(os.Args[1:]) {
+		if err := runRemoteAgentCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "remote agent error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 1 {
 		if err := runWizard(version); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -100,6 +107,37 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func isRemoteAgentCommand(args []string) bool {
+	return len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "remote-agent")
+}
+
+func runRemoteAgentCommand(args []string) error {
+	fs := flag.NewFlagSet("dia remote-agent", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	workspace := os.Getenv("DIA_REMOTE_WORKSPACE")
+	stdio := false
+	showVersion := false
+	fs.StringVar(&workspace, "workspace", workspace, "remote agent workspace")
+	fs.BoolVar(&stdio, "stdio", false, "serve one framed request over stdin/stdout")
+	fs.BoolVar(&showVersion, "version", false, "print remote agent version")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if showVersion {
+		fmt.Println(version)
+		return nil
+	}
+	if !stdio {
+		return fmt.Errorf("remote-agent requires --stdio")
+	}
+	return runRemoteAgent(remoteAgentOptions{
+		Workspace: workspace,
+		Version:   version,
+		Stdin:     os.Stdin,
+		Stdout:    os.Stdout,
+	})
 }
 
 func parseCLI(args []string) (cliOptions, error) {
@@ -231,14 +269,21 @@ func defaultOutputTar(image string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := strings.ReplaceAll(ref.Repository, "/", "_")
+	repository := ref.Repository
+	if ref.Registry == dockerHubRegistryAlias {
+		repository = strings.TrimPrefix(repository, "library/")
+	}
+	name := sanitizeComponent(strings.ReplaceAll(repository, "/", "_"))
 	tag := ref.Tag
+	if tag == "" {
+		tag = sanitizeComponent(strings.ReplaceAll(ref.Digest, ":", "_"))
+	}
 	if tag == "" {
 		tag = "latest"
 	}
-	file := fmt.Sprintf("%s_%s.tar", name, tag)
+	file := fmt.Sprintf("%s_%s.tar", name, sanitizeComponent(tag))
 	if ref.Registry != dockerHubRegistryAlias {
-		prefix := strings.ReplaceAll(ref.Registry, ":", "_")
+		prefix := sanitizeComponent(strings.ReplaceAll(ref.Registry, ":", "_"))
 		file = fmt.Sprintf("%s_%s", prefix, file)
 	}
 	if strings.TrimSpace(file) == "" {

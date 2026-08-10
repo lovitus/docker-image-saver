@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -81,6 +82,36 @@ func TestOpenLayerStreamFromRawZstd(t *testing.T) {
 	}
 	if !bytes.Equal(got, original) {
 		t.Fatalf("decoded payload mismatch: got %q want %q", got, original)
+	}
+}
+
+func TestCompressedLayerCloseCompletesDescriptorVerification(t *testing.T) {
+	var compressed bytes.Buffer
+	encoder, err := zstd.NewWriter(&compressed)
+	if err != nil {
+		t.Fatalf("new zstd writer: %v", err)
+	}
+	if _, err := encoder.Write([]byte("verified compressed layer")); err != nil {
+		t.Fatalf("write zstd payload: %v", err)
+	}
+	encoder.Close()
+
+	wrongSum := sha256.Sum256([]byte("different compressed bytes"))
+	verified, err := newVerifyingReadCloser(io.NopCloser(bytes.NewReader(compressed.Bytes())), descriptor{
+		Digest: "sha256:" + hex.EncodeToString(wrongSum[:]),
+		Size:   int64(compressed.Len()),
+	}, "blob")
+	if err != nil {
+		t.Fatalf("create descriptor verifier: %v", err)
+	}
+	stream, err := openZstdLayerStream(verified)
+	if err != nil {
+		t.Fatalf("open zstd stream: %v", err)
+	}
+	_, readErr := io.Copy(io.Discard, stream.Reader)
+	closeErr := stream.Reader.Close()
+	if readErr == nil && closeErr == nil {
+		t.Fatal("compressed descriptor digest mismatch was not detected")
 	}
 }
 
@@ -196,6 +227,24 @@ func TestWriteLayerFromRawBlobAcceptsSHA512DiffID(t *testing.T) {
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar writer: %v", err)
+	}
+}
+
+func TestExtractDiffIDsValidatesRootFSAndDigest(t *testing.T) {
+	if _, err := extractDiffIDs([]byte(`{"architecture":"amd64"}`)); err == nil {
+		t.Fatal("missing rootfs was accepted")
+	}
+	if _, err := extractDiffIDs([]byte(`{"rootfs":{"type":"layers","diff_ids":["sha256:../../bad"]}}`)); err == nil {
+		t.Fatal("malformed diff_id was accepted")
+	}
+
+	digest := "sha512:" + strings.Repeat("a", 128)
+	got, err := extractDiffIDs([]byte(`{"rootfs":{"type":"layers","diff_ids":["` + digest + `"]}}`))
+	if err != nil {
+		t.Fatalf("valid sha512 diff_id rejected: %v", err)
+	}
+	if len(got) != 1 || got[0] != digest {
+		t.Fatalf("unexpected diff_ids: %v", got)
 	}
 }
 

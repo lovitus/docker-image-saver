@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+
+      - name: Check embedded GUI JavaScript
+        run: awk '/<script>/{flag=1;next}/<\/script>/{flag=0}flag' web/index.html | node --check -
+
+      - name: Verify modules are reproducible
+        run: |
+          set -euo pipefail
+          go mod verify
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Test shuffled order
+        run: go test -shuffle=on -count=3 ./...
+
+  cross-build:
+    name: cross-build
+    needs: quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build every supported release target
+        run: |
+          set -euo pipefail
+          targets=$(go tool dist list | grep -E '^(linux|darwin|windows)/')
+          count=0
+
+          while IFS= read -r target; do
+            [ -z "$target" ] && continue
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then
+              EXT=".exe"
+            fi
+            count=$((count + 1))
+            echo "[$count] $target"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -o "$RUNNER_TEMP/dia_${GOOS}_${GOARCH}${EXT}" .
+          done <<< "$targets"
+
+          test "$count" -gt 0

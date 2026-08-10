@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +13,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,17 +36,22 @@ type guiOptions struct {
 	Password  string
 	Insecure  bool
 	NoBrowser bool
+	ConfigDir string
 	Stdout    io.Writer
 	Stderr    io.Writer
 }
 
 type guiInspectRequest struct {
-	Image            string `json:"image"`
-	Proxy            string `json:"proxy,omitempty"`
-	Username         string `json:"username,omitempty"`
-	Password         string `json:"password,omitempty"`
-	UseSavedPassword bool   `json:"use_saved_password,omitempty"`
-	Insecure         bool   `json:"insecure,omitempty"`
+	Context                  context.Context `json:"-"`
+	Image                    string          `json:"image"`
+	RegistryID               string          `json:"registry_id,omitempty"`
+	CredentialID             string          `json:"credential_id,omitempty"`
+	Proxy                    string          `json:"proxy,omitempty"`
+	UseSavedProxyCredentials bool            `json:"use_saved_proxy_credentials,omitempty"`
+	Username                 string          `json:"username,omitempty"`
+	Password                 string          `json:"password,omitempty"`
+	UseSavedPassword         bool            `json:"use_saved_password,omitempty"`
+	Insecure                 bool            `json:"insecure,omitempty"`
 }
 
 type guiPlatform struct {
@@ -63,25 +71,30 @@ type guiInspectResponse struct {
 }
 
 type guiBootstrapData struct {
-	Version          string `json:"version"`
-	Image            string `json:"image"`
-	Output           string `json:"output"`
-	OutputExplicit   bool   `json:"output_explicit"`
-	Proxy            string `json:"proxy"`
-	Username         string `json:"username"`
-	Insecure         bool   `json:"insecure"`
-	HasSavedPassword bool   `json:"has_saved_password"`
+	Version                  string `json:"version"`
+	Image                    string `json:"image"`
+	Output                   string `json:"output"`
+	OutputExplicit           bool   `json:"output_explicit"`
+	Proxy                    string `json:"proxy"`
+	HasSavedProxyCredentials bool   `json:"has_saved_proxy_credentials"`
+	Username                 string `json:"username"`
+	Insecure                 bool   `json:"insecure"`
+	HasSavedPassword         bool   `json:"has_saved_password"`
 }
 
 type guiExportRequest struct {
-	Image            string    `json:"image"`
-	Output           string    `json:"output"`
-	Proxy            string    `json:"proxy,omitempty"`
-	Username         string    `json:"username,omitempty"`
-	Password         string    `json:"password,omitempty"`
-	UseSavedPassword bool      `json:"use_saved_password,omitempty"`
-	Insecure         bool      `json:"insecure,omitempty"`
-	Selected         *[]string `json:"selected,omitempty"`
+	Context                  context.Context `json:"-"`
+	Image                    string          `json:"image"`
+	Output                   string          `json:"output"`
+	RegistryID               string          `json:"registry_id,omitempty"`
+	CredentialID             string          `json:"credential_id,omitempty"`
+	Proxy                    string          `json:"proxy,omitempty"`
+	UseSavedProxyCredentials bool            `json:"use_saved_proxy_credentials,omitempty"`
+	Username                 string          `json:"username,omitempty"`
+	Password                 string          `json:"password,omitempty"`
+	UseSavedPassword         bool            `json:"use_saved_password,omitempty"`
+	Insecure                 bool            `json:"insecure,omitempty"`
+	Selected                 *[]string       `json:"selected,omitempty"`
 }
 
 type guiExportResponse struct {
@@ -89,45 +102,70 @@ type guiExportResponse struct {
 }
 
 type guiTaskInput struct {
-	Image    string   `json:"image"`
-	Output   string   `json:"output"`
-	Proxy    string   `json:"proxy,omitempty"`
-	Username string   `json:"username,omitempty"`
-	Insecure bool     `json:"insecure,omitempty"`
-	Selected []string `json:"selected"`
+	Kind             string   `json:"kind,omitempty"`
+	Image            string   `json:"image"`
+	Output           string   `json:"output"`
+	Proxy            string   `json:"proxy,omitempty"`
+	Username         string   `json:"username,omitempty"`
+	Insecure         bool     `json:"insecure,omitempty"`
+	Selected         []string `json:"selected"`
+	RemoteID         string   `json:"remote_id,omitempty"`
+	SourceRegistryID string   `json:"source_registry_id,omitempty"`
+	TargetRegistryID string   `json:"target_registry_id,omitempty"`
+	ImageListID      string   `json:"image_list_id,omitempty"`
 }
 
 type guiTaskSnapshot struct {
-	ID                 string       `json:"id"`
-	Status             string       `json:"status"`
-	Input              guiTaskInput `json:"input"`
-	Stage              string       `json:"stage,omitempty"`
-	Message            string       `json:"message,omitempty"`
-	Platform           string       `json:"platform,omitempty"`
-	CurrentLayer       int          `json:"current_layer,omitempty"`
-	TotalLayers        int          `json:"total_layers,omitempty"`
-	BytesDone          int64        `json:"bytes_done,omitempty"`
-	BytesTotal         int64        `json:"bytes_total,omitempty"`
-	SpeedBPS           float64      `json:"speed_bps,omitempty"`
-	ETASeconds         int64        `json:"eta_seconds,omitempty"`
-	OutputFiles        []string     `json:"output_files,omitempty"`
-	PlatformIndexPath  string       `json:"platform_index_path,omitempty"`
-	DockerLoadCommands []string     `json:"docker_load_commands,omitempty"`
-	Error              string       `json:"error,omitempty"`
-	UpdatedAt          time.Time    `json:"updated_at"`
+	ID                 string         `json:"id"`
+	Status             string         `json:"status"`
+	Input              guiTaskInput   `json:"input"`
+	Stage              string         `json:"stage,omitempty"`
+	Message            string         `json:"message,omitempty"`
+	Platform           string         `json:"platform,omitempty"`
+	CurrentLayer       int            `json:"current_layer,omitempty"`
+	TotalLayers        int            `json:"total_layers,omitempty"`
+	BytesDone          int64          `json:"bytes_done,omitempty"`
+	BytesTotal         int64          `json:"bytes_total,omitempty"`
+	SpeedBPS           float64        `json:"speed_bps,omitempty"`
+	ETASeconds         int64          `json:"eta_seconds,omitempty"`
+	CurrentImage       int            `json:"current_image,omitempty"`
+	TotalImages        int            `json:"total_images,omitempty"`
+	Engine             string         `json:"engine,omitempty"`
+	RemoteID           string         `json:"remote_id,omitempty"`
+	OutputFiles        []string       `json:"output_files,omitempty"`
+	PlatformIndexPath  string         `json:"platform_index_path,omitempty"`
+	DockerLoadCommands []string       `json:"docker_load_commands,omitempty"`
+	Error              string         `json:"error,omitempty"`
+	SyncResult         *syncJobResult `json:"sync_result,omitempty"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 type guiServer struct {
-	version   string
-	options   guiOptions
-	taskStore *guiTaskStore
-	inspectFn func(guiInspectRequest) (guiInspectResponse, error)
-	planFn    func(guiExportRequest) ([]string, error)
-	exportFn  func(guiExportRequest, *exportHooks) (exportReport, error)
+	version       string
+	options       guiOptions
+	taskStore     *guiTaskStore
+	configStore   *configStore
+	configErr     error
+	sessionToken  string
+	inspectFn     func(guiInspectRequest) (guiInspectResponse, error)
+	planFn        func(guiExportRequest) ([]string, error)
+	exportFn      func(guiExportRequest, *exportHooks) (exportReport, error)
+	remoteFactory func(remoteProfile, string, string) (guiRemoteClient, error)
 }
 
 func runGUI(version string, opts guiOptions) error {
+	if strings.TrimSpace(opts.ConfigDir) == "" {
+		configDir, err := defaultConfigDir()
+		if err != nil {
+			return err
+		}
+		opts.ConfigDir = configDir
+	}
 	server := newGUIServer(version, opts)
+	if server.configErr != nil {
+		return server.configErr
+	}
+	server.sessionToken = newGUISessionToken()
 	httpServer := &http.Server{
 		Handler:           server.routes(),
 		ReadHeaderTimeout: 15 * time.Second,
@@ -139,7 +177,8 @@ func runGUI(version string, opts guiOptions) error {
 	defer listener.Close()
 
 	address := "http://" + listener.Addr().String()
-	logf(opts.Stdout, "GUI: %s\n", address)
+	launchAddress := address + "/?token=" + url.QueryEscape(server.sessionToken)
+	logf(opts.Stdout, "GUI: %s\n", launchAddress)
 	logf(opts.Stdout, "Press Ctrl+C to stop.\n")
 
 	errCh := make(chan error, 1)
@@ -148,9 +187,9 @@ func runGUI(version string, opts guiOptions) error {
 	}()
 
 	if !opts.NoBrowser {
-		if err := openBrowser(address); err != nil {
+		if err := openBrowser(launchAddress); err != nil {
 			logf(opts.Stderr, "warning: unable to open browser automatically: %v\n", err)
-			logf(opts.Stdout, "Open manually: %s\n", address)
+			logf(opts.Stdout, "Open manually: %s\n", launchAddress)
 		}
 	}
 
@@ -176,9 +215,15 @@ func newGUIServer(version string, opts guiOptions) *guiServer {
 		options:   opts,
 		taskStore: newGUITaskStore(),
 	}
+	if strings.TrimSpace(opts.ConfigDir) != "" {
+		server.configStore, server.configErr = openConfigStore(opts.ConfigDir)
+	}
 	server.inspectFn = server.inspect
 	server.planFn = server.planExportOutputs
 	server.exportFn = server.export
+	server.remoteFactory = func(profile remoteProfile, secret, version string) (guiRemoteClient, error) {
+		return newSSHRemoteClient(profile, secret, version)
+	}
 	return server
 }
 
@@ -188,7 +233,12 @@ func (s *guiServer) routes() http.Handler {
 	mux.HandleFunc("/api/inspect", s.handleInspect)
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/tasks/", s.handleTask)
-	return mux
+	mux.HandleFunc("/api/settings", s.handleSettings)
+	mux.HandleFunc("/api/settings/", s.handleSettingsResource)
+	mux.HandleFunc("/api/remotes/", s.handleRemoteResource)
+	mux.HandleFunc("/api/harbor", s.handleHarborAction)
+	mux.HandleFunc("/api/sync", s.handleSync)
+	return s.secureGUIHandler(mux)
 }
 
 func (s *guiServer) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -196,20 +246,26 @@ func (s *guiServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	data, err := guiAssets.ReadFile("web/index.html")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	proxyDisplay, hasProxyCredentials := proxyURLWithoutCredentials(s.options.Proxy)
 	bootstrap := guiBootstrapData{
-		Version:          s.version,
-		Image:            strings.TrimSpace(s.options.Image),
-		Output:           strings.TrimSpace(s.options.Output),
-		OutputExplicit:   strings.TrimSpace(s.options.Output) != "",
-		Proxy:            strings.TrimSpace(s.options.Proxy),
-		Username:         strings.TrimSpace(s.options.Username),
-		Insecure:         s.options.Insecure,
-		HasSavedPassword: strings.TrimSpace(s.options.Password) != "",
+		Version:                  s.version,
+		Image:                    strings.TrimSpace(s.options.Image),
+		Output:                   strings.TrimSpace(s.options.Output),
+		OutputExplicit:           strings.TrimSpace(s.options.Output) != "",
+		Proxy:                    proxyDisplay,
+		HasSavedProxyCredentials: hasProxyCredentials,
+		Username:                 strings.TrimSpace(s.options.Username),
+		Insecure:                 s.options.Insecure,
+		HasSavedPassword:         strings.TrimSpace(s.options.Password) != "",
 	}
 	if bootstrap.Image == "" {
 		bootstrap.Image = "alpine:latest"
@@ -236,10 +292,11 @@ func (s *guiServer) handleInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req guiInspectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeGUIJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Context = r.Context()
 	req = s.applyInspectDefaults(req)
 	resp, err := s.inspectFn(req)
 	if err != nil {
@@ -255,10 +312,11 @@ func (s *guiServer) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req guiExportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeGUIJSON(r, &req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Context = r.Context()
 	req = s.applyExportDefaults(req)
 	if strings.TrimSpace(req.Image) == "" {
 		writeJSONError(w, http.StatusBadRequest, fmt.Errorf("image is required"))
@@ -288,12 +346,13 @@ func (s *guiServer) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task, err := s.taskStore.newTaskWithOutputs(guiTaskInput{
-		Image:    req.Image,
-		Output:   req.Output,
-		Proxy:    req.Proxy,
-		Username: req.Username,
-		Insecure: req.Insecure,
-		Selected: selected,
+		Image:            req.Image,
+		Output:           req.Output,
+		Proxy:            proxyURLDisplay(req.Proxy),
+		Username:         req.Username,
+		Insecure:         req.Insecure,
+		Selected:         selected,
+		SourceRegistryID: req.RegistryID,
 	}, reservationPaths)
 	if err != nil {
 		writeJSONError(w, http.StatusConflict, err)
@@ -301,7 +360,11 @@ func (s *guiServer) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusAccepted, guiExportResponse{TaskID: task.snapshot().ID})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	req.Context = ctx
+	task.setCancel(cancel)
 	go func() {
+		defer cancel()
 		defer task.releaseOutput()
 		hooks := &exportHooks{
 			Progress: task.handleProgress,
@@ -316,6 +379,7 @@ func (s *guiServer) handleExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *guiServer) applyInspectDefaults(req guiInspectRequest) guiInspectRequest {
+	req.Proxy = s.applyStartupProxyCredentials(req.Proxy, req.UseSavedProxyCredentials)
 	if req.UseSavedPassword && strings.TrimSpace(req.Password) == "" {
 		req.Password = s.options.Password
 	}
@@ -323,10 +387,22 @@ func (s *guiServer) applyInspectDefaults(req guiInspectRequest) guiInspectReques
 }
 
 func (s *guiServer) applyExportDefaults(req guiExportRequest) guiExportRequest {
+	req.Proxy = s.applyStartupProxyCredentials(req.Proxy, req.UseSavedProxyCredentials)
 	if req.UseSavedPassword && strings.TrimSpace(req.Password) == "" {
 		req.Password = s.options.Password
 	}
 	return req
+}
+
+func (s *guiServer) applyStartupProxyCredentials(requestProxy string, useSaved bool) string {
+	if !useSaved {
+		return requestProxy
+	}
+	startupDisplay, hasCredentials := proxyURLWithoutCredentials(s.options.Proxy)
+	if hasCredentials && strings.TrimSpace(requestProxy) == startupDisplay {
+		return strings.TrimSpace(s.options.Proxy)
+	}
+	return requestProxy
 }
 
 func (s *guiServer) handleTask(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +427,20 @@ func (s *guiServer) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "events" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		s.handleTaskEvents(w, r, task)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "cancel" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		task.cancelTask()
+		writeJSON(w, http.StatusAccepted, task.snapshot())
 		return
 	}
 	http.NotFound(w, r)
@@ -391,11 +480,11 @@ func (s *guiServer) handleTaskEvents(w http.ResponseWriter, r *http.Request, tas
 }
 
 func (s *guiServer) inspect(req guiInspectRequest) (guiInspectResponse, error) {
-	ref, err := parseImageRef(req.Image)
-	if err != nil {
-		return guiInspectResponse{}, err
-	}
-	client, err := newRegistryClient(req.Proxy, req.Username, req.Password, req.Insecure)
+	ref, client, err := s.resolveGUIRegistryRequest(
+		req.Context,
+		req.Image, req.RegistryID, req.CredentialID,
+		req.Proxy, req.Username, req.Password, req.Insecure,
+	)
 	if err != nil {
 		return guiInspectResponse{}, err
 	}
@@ -427,11 +516,11 @@ func (s *guiServer) inspect(req guiInspectRequest) (guiInspectResponse, error) {
 }
 
 func (s *guiServer) export(req guiExportRequest, hooks *exportHooks) (exportReport, error) {
-	ref, err := parseImageRef(req.Image)
-	if err != nil {
-		return exportReport{}, err
-	}
-	client, err := newRegistryClient(req.Proxy, req.Username, req.Password, req.Insecure)
+	ref, client, err := s.resolveGUIRegistryRequest(
+		req.Context,
+		req.Image, req.RegistryID, req.CredentialID,
+		req.Proxy, req.Username, req.Password, req.Insecure,
+	)
 	if err != nil {
 		return exportReport{}, err
 	}
@@ -450,11 +539,11 @@ func (s *guiServer) export(req guiExportRequest, hooks *exportHooks) (exportRepo
 }
 
 func (s *guiServer) planExportOutputs(req guiExportRequest) ([]string, error) {
-	ref, err := parseImageRef(req.Image)
-	if err != nil {
-		return nil, err
-	}
-	client, err := newRegistryClient(req.Proxy, req.Username, req.Password, req.Insecure)
+	ref, client, err := s.resolveGUIRegistryRequest(
+		req.Context,
+		req.Image, req.RegistryID, req.CredentialID,
+		req.Proxy, req.Username, req.Password, req.Insecure,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -472,6 +561,44 @@ func (s *guiServer) planExportOutputs(req guiExportRequest) ([]string, error) {
 	}
 	outputs = append(outputs, platformIndexPath(req.Output))
 	return normalizeOutputReservationKeys(outputs)
+}
+
+func (s *guiServer) resolveGUIRegistryRequest(
+	ctx context.Context,
+	image, registryID, credentialID, proxy, username, password string,
+	insecure bool,
+) (imageRef, *registryClient, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	registryID = strings.TrimSpace(registryID)
+	if registryID == "" {
+		ref, err := parseImageRef(image)
+		if err != nil {
+			return imageRef{}, nil, err
+		}
+		client, err := newRegistryClientWithScheme(ctx, proxy, username, password, insecure, "https")
+		return ref, client, err
+	}
+
+	store, err := s.requireConfigStore()
+	if err != nil {
+		return imageRef{}, nil, err
+	}
+	profile, err := store.registry(registryID)
+	if err != nil {
+		return imageRef{}, nil, err
+	}
+	access, err := s.registryAccess(store, profile, credentialID)
+	if err != nil {
+		return imageRef{}, nil, err
+	}
+	ref, err := access.imageRef(image)
+	if err != nil {
+		return imageRef{}, nil, err
+	}
+	client, err := access.client(ctx)
+	return ref, client, err
 }
 
 func resolveSelectedPlatformRefs(platforms []platformOption, selected *[]string) ([]int, error) {
@@ -506,18 +633,46 @@ func resolveSelectedPlatformRefs(platforms []platformOption, selected *[]string)
 }
 
 type guiTaskStore struct {
-	mu            sync.RWMutex
-	tasks         map[string]*guiTask
-	activeOutputs map[string]string
-	taskRetention time.Duration
+	mu              sync.RWMutex
+	tasks           map[string]*guiTask
+	activeOutputs   map[string]string
+	activeExecutors map[string]string
+	taskRetention   time.Duration
 }
 
 func newGUITaskStore() *guiTaskStore {
 	return &guiTaskStore{
-		tasks:         make(map[string]*guiTask),
-		activeOutputs: make(map[string]string),
-		taskRetention: 10 * time.Minute,
+		tasks:           make(map[string]*guiTask),
+		activeOutputs:   make(map[string]string),
+		activeExecutors: make(map[string]string),
+		taskRetention:   10 * time.Minute,
 	}
+}
+
+func (s *guiTaskStore) newRemoteTask(input guiTaskInput, remoteID string) (*guiTask, error) {
+	remoteID = strings.TrimSpace(remoteID)
+	if remoteID == "" {
+		return nil, fmt.Errorf("execution machine is required")
+	}
+	id := newConfigID("task")
+	task := &guiTask{
+		snapshotValue: guiTaskSnapshot{
+			ID: id, Status: "running", Input: input, RemoteID: remoteID, UpdatedAt: time.Now().UTC(),
+		},
+		subscribers: make(map[*guiSubscriber]struct{}),
+		store:       s,
+		executorKey: remoteID,
+	}
+	s.mu.Lock()
+	if owner, exists := s.activeExecutors[remoteID]; exists {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("execution machine is already running task %s", owner)
+	}
+	s.activeExecutors[remoteID] = id
+	s.tasks[id] = task
+	s.mu.Unlock()
+	task.publish()
+	return task, nil
 }
 
 func (s *guiTaskStore) newTask(input guiTaskInput) (*guiTask, error) {
@@ -525,7 +680,7 @@ func (s *guiTaskStore) newTask(input guiTaskInput) (*guiTask, error) {
 }
 
 func (s *guiTaskStore) newTaskWithOutputs(input guiTaskInput, outputs []string) (*guiTask, error) {
-	id := strconv.FormatInt(time.Now().UnixNano(), 36)
+	id := newConfigID("task")
 	outputKeys, err := normalizeOutputReservationKeys(outputs)
 	if err != nil {
 		return nil, err
@@ -769,6 +924,8 @@ type guiTask struct {
 	subscribers   map[*guiSubscriber]struct{}
 	store         *guiTaskStore
 	outputKeys    []string
+	executorKey   string
+	cancel        context.CancelFunc
 	released      bool
 	cleanupSet    bool
 }
@@ -822,9 +979,10 @@ func (t *guiTask) releaseOutput() {
 	store := t.store
 	outputKeys := append([]string(nil), t.outputKeys...)
 	taskID := t.snapshotValue.ID
+	executorKey := t.executorKey
 	t.mu.Unlock()
 
-	if store == nil || len(outputKeys) == 0 {
+	if store == nil {
 		return
 	}
 	store.mu.Lock()
@@ -832,6 +990,9 @@ func (t *guiTask) releaseOutput() {
 		if owner, ok := store.activeOutputs[outputKey]; ok && owner == taskID {
 			delete(store.activeOutputs, outputKey)
 		}
+	}
+	if owner, ok := store.activeExecutors[executorKey]; executorKey != "" && ok && owner == taskID {
+		delete(store.activeExecutors, executorKey)
 	}
 	store.mu.Unlock()
 }
@@ -898,6 +1059,117 @@ func (t *guiTask) handleProgress(event progressEvent) {
 	})
 }
 
+func (t *guiTask) setCancel(cancel context.CancelFunc) {
+	t.mu.Lock()
+	t.cancel = cancel
+	t.mu.Unlock()
+}
+
+func (t *guiTask) cancelTask() {
+	t.mu.Lock()
+	cancel := t.cancel
+	if t.snapshotValue.Status == "running" {
+		t.snapshotValue.Status = "canceling"
+		t.snapshotValue.Message = "cancel requested"
+		t.snapshotValue.UpdatedAt = time.Now().UTC()
+	}
+	t.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	t.publish()
+}
+
+func (t *guiTask) handleSyncProgress(event syncProgressEvent) {
+	t.update(func(snapshot *guiTaskSnapshot) {
+		imageChanged := event.CurrentImage > 0 && snapshot.CurrentImage > 0 && event.CurrentImage != snapshot.CurrentImage
+		platformChanged := event.Platform != "" && snapshot.Platform != "" && event.Platform != snapshot.Platform
+		archiveStarted := strings.HasSuffix(event.Stage, "archive_start")
+		if imageChanged || platformChanged || archiveStarted {
+			snapshot.BytesDone = 0
+			snapshot.BytesTotal = 0
+			snapshot.SpeedBPS = 0
+			snapshot.ETASeconds = 0
+			snapshot.CurrentLayer = 0
+			snapshot.TotalLayers = 0
+		}
+		snapshot.Stage = event.Stage
+		snapshot.Message = event.Message
+		if event.Platform != "" {
+			snapshot.Platform = event.Platform
+		} else if event.Image != "" {
+			snapshot.Platform = event.Image
+		}
+		if event.CurrentImage > 0 || event.TotalImages > 0 {
+			snapshot.CurrentImage = event.CurrentImage
+			snapshot.TotalImages = event.TotalImages
+		}
+		if event.CurrentBlob > 0 || event.TotalBlobs > 0 {
+			snapshot.CurrentLayer = event.CurrentBlob
+			snapshot.TotalLayers = event.TotalBlobs
+		}
+		if event.BytesDone > 0 || event.BytesTotal > 0 {
+			snapshot.BytesDone = event.BytesDone
+			snapshot.BytesTotal = event.BytesTotal
+		}
+		if event.SpeedBPS > 0 {
+			snapshot.SpeedBPS = event.SpeedBPS
+		}
+		if event.ETASeconds > 0 {
+			snapshot.ETASeconds = event.ETASeconds
+		}
+	})
+}
+
+func (t *guiTask) completeSync(result syncJobResult) {
+	outputs, commands := syncResultOutputs(result)
+	t.update(func(snapshot *guiTaskSnapshot) {
+		snapshot.Status = "done"
+		snapshot.Stage = "complete"
+		snapshot.Message = fmt.Sprintf("%d image(s) completed", result.Succeeded)
+		snapshot.Engine = result.Engine
+		snapshot.SyncResult = &result
+		snapshot.OutputFiles = outputs
+		snapshot.DockerLoadCommands = commands
+	})
+	t.scheduleCleanup()
+}
+
+func (t *guiTask) failSync(result syncJobResult, err error) {
+	outputs, commands := syncResultOutputs(result)
+	t.update(func(snapshot *guiTaskSnapshot) {
+		snapshot.Status = "failed"
+		if errors.Is(err, context.Canceled) {
+			snapshot.Status = "canceled"
+		}
+		snapshot.Stage = snapshot.Status
+		snapshot.Error = err.Error()
+		snapshot.Engine = result.Engine
+		snapshot.SyncResult = &result
+		snapshot.OutputFiles = outputs
+		snapshot.DockerLoadCommands = commands
+	})
+	t.scheduleCleanup()
+}
+
+func syncResultOutputs(result syncJobResult) ([]string, []string) {
+	var outputs []string
+	var commands []string
+	for _, item := range result.Items {
+		if item.Export == nil {
+			continue
+		}
+		for _, archive := range item.Export.Archives {
+			outputs = append(outputs, archive.Result.AbsPath)
+			commands = append(commands, "docker load -i "+posixShellQuote(archive.Result.AbsPath))
+		}
+		if item.Export.IndexPath != "" {
+			outputs = append(outputs, item.Export.IndexPath)
+		}
+	}
+	return outputs, commands
+}
+
 func (t *guiTask) complete(report exportReport) {
 	outputs := make([]string, 0, len(report.Archives))
 	commands := make([]string, 0, len(report.Archives))
@@ -917,8 +1189,13 @@ func (t *guiTask) complete(report exportReport) {
 
 func (t *guiTask) fail(err error) {
 	t.update(func(snapshot *guiTaskSnapshot) {
-		snapshot.Status = "failed"
-		snapshot.Stage = "error"
+		if errors.Is(err, context.Canceled) {
+			snapshot.Status = "canceled"
+			snapshot.Stage = "canceled"
+		} else {
+			snapshot.Status = "failed"
+			snapshot.Stage = "error"
+		}
 		snapshot.Error = err.Error()
 	})
 	t.scheduleCleanup()
@@ -951,4 +1228,85 @@ func openBrowser(url string) error {
 		cmd = exec.Command("xdg-open", url)
 	}
 	return cmd.Start()
+}
+
+func newGUISessionToken() string {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return newConfigID("session")
+	}
+	return base64.RawURLEncoding.EncodeToString(random)
+}
+
+func (s *guiServer) secureGUIHandler(next http.Handler) http.Handler {
+	if s.sessionToken == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		if !isLoopbackGUIHost(r.Host) {
+			http.Error(w, "invalid GUI host", http.StatusForbidden)
+			return
+		}
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			parsed, err := url.Parse(origin)
+			if err != nil || !sameGUIHost(parsed.Host, r.Host) {
+				http.Error(w, "invalid GUI origin", http.StatusForbidden)
+				return
+			}
+		}
+		if r.URL.Path == "/" && secureTokenEqual(r.URL.Query().Get("token"), s.sessionToken) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "dia_session",
+				Value:    s.sessionToken,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		cookie, err := r.Cookie("dia_session")
+		if err != nil || !secureTokenEqual(cookie.Value, s.sessionToken) {
+			http.Error(w, "GUI session token is required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func secureTokenEqual(actual, expected string) bool {
+	if len(actual) != len(expected) || expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
+}
+
+func isLoopbackGUIHost(hostport string) bool {
+	host := hostport
+	if parsedHost, _, err := net.SplitHostPort(hostport); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	ip := net.ParseIP(host)
+	return strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
+}
+
+func sameGUIHost(left, right string) bool {
+	leftHost, leftPort := splitGUIHostPort(left)
+	rightHost, rightPort := splitGUIHostPort(right)
+	return strings.EqualFold(leftHost, rightHost) && leftPort == rightPort
+}
+
+func splitGUIHostPort(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return strings.Trim(value, "[]"), ""
+	}
+	return strings.Trim(host, "[]"), port
 }

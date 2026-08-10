@@ -19,9 +19,9 @@ func TestGUIIndexBootstrapsCLIFlags(t *testing.T) {
 	server := newGUIServer("vtest", guiOptions{
 		Image:    "private.example/app:v1",
 		Output:   "/tmp/private_app.tar",
-		Proxy:    "socks5h://127.0.0.1:7897",
+		Proxy:    "socks5h://proxy-user:proxy-password@127.0.0.1:7897",
 		Username: "alice",
-		Password: "secret",
+		Password: "test-only-registry-password-value",
 		Insecure: true,
 	})
 
@@ -46,8 +46,55 @@ func TestGUIIndexBootstrapsCLIFlags(t *testing.T) {
 			t.Fatalf("bootstrap payload missing %q", want)
 		}
 	}
-	if strings.Contains(html, "secret") {
+	if strings.Contains(html, "test-only-registry-password-value") {
 		t.Fatal("password leaked into GUI bootstrap")
+	}
+	if strings.Contains(html, "proxy-user") || strings.Contains(html, "proxy-password") {
+		t.Fatal("proxy credentials leaked into GUI bootstrap")
+	}
+	if !strings.Contains(html, `has_saved_proxy_credentials`) {
+		t.Fatal("bootstrap did not advertise hidden startup proxy credentials")
+	}
+}
+
+func TestGUIStartupProxyCredentialsRemainServerSideAndCanBeCleared(t *testing.T) {
+	fullProxy := "socks5h://proxy-user:proxy-password@127.0.0.1:7897"
+	displayProxy := "socks5h://127.0.0.1:7897"
+	server := newGUIServer("test", guiOptions{Proxy: fullProxy})
+	call := 0
+	server.inspectFn = func(req guiInspectRequest) (guiInspectResponse, error) {
+		call++
+		want := fullProxy
+		if call == 2 {
+			want = displayProxy
+		}
+		if req.Proxy != want {
+			t.Fatalf("inspect call %d proxy: got %q want %q", call, req.Proxy, want)
+		}
+		return guiInspectResponse{Image: req.Image}, nil
+	}
+
+	for _, body := range []string{
+		`{"image":"alpine:latest","proxy":"socks5h://127.0.0.1:7897","use_saved_proxy_credentials":true}`,
+		`{"image":"alpine:latest","proxy":"socks5h://127.0.0.1:7897","use_saved_proxy_credentials":false}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/inspect", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		server.routes().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("inspect call %d status=%d body=%s", call+1, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestGUIIndexRejectsMutationMethods(t *testing.T) {
+	server := newGUIServer("vtest", guiOptions{})
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("ignored"))
+	rec := httptest.NewRecorder()
+	server.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("unexpected status: got %d want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -195,6 +242,46 @@ verify:
 	if len(done.DockerLoadCommands) != 1 || !strings.Contains(done.DockerLoadCommands[0], "docker load -i") {
 		t.Fatalf("unexpected docker load commands: %+v", done.DockerLoadCommands)
 	}
+}
+
+func TestGUIExportCancellationCancelsRegistryContext(t *testing.T) {
+	server := newGUIServer("test", guiOptions{})
+	server.planFn = func(req guiExportRequest) ([]string, error) {
+		return []string{req.Output}, nil
+	}
+	started := make(chan struct{})
+	server.exportFn = func(req guiExportRequest, hooks *exportHooks) (exportReport, error) {
+		close(started)
+		<-req.Context.Done()
+		return exportReport{}, req.Context.Err()
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/export", strings.NewReader(`{"image":"alpine:latest","output":"cancel.tar","selected":["sha256:test"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var accepted guiExportResponse
+	if err := json.NewDecoder(rec.Body).Decode(&accepted); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("export did not start")
+	}
+	task := server.taskStore.get(accepted.TaskID)
+	task.cancelTask()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if snapshot := task.snapshot(); snapshot.Status == "canceled" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("task did not reach canceled state: %+v", task.snapshot())
 }
 
 func TestGUITaskSubscriberSeesTerminalStateAfterLag(t *testing.T) {
@@ -398,6 +485,44 @@ func TestGUITaskHandleProgressResetsCountersOnPlatformSwitch(t *testing.T) {
 	}
 	if snapshot.SpeedBPS != 0 || snapshot.ETASeconds != 0 {
 		t.Fatalf("expected speed reset, got speed=%f eta=%d", snapshot.SpeedBPS, snapshot.ETASeconds)
+	}
+}
+
+func TestGUITaskHandleSyncProgressResetsCountersOnArchiveSwitch(t *testing.T) {
+	task := &guiTask{
+		snapshotValue: guiTaskSnapshot{ID: "sync-progress", Status: "running"},
+		subscribers:   make(map[*guiSubscriber]struct{}),
+		store:         newGUITaskStore(),
+	}
+	task.handleSyncProgress(syncProgressEvent{
+		Stage: "archive_write_layer", Image: "team/app:v1", Platform: "linux/amd64",
+		CurrentImage: 1, TotalImages: 1, CurrentBlob: 4, TotalBlobs: 4,
+		BytesDone: 512, BytesTotal: 512, SpeedBPS: 128, ETASeconds: 1,
+	})
+	task.handleSyncProgress(syncProgressEvent{
+		Stage: "archive_archive_start", Image: "team/app:v1", Platform: "linux/arm64",
+		CurrentImage: 1, TotalImages: 1,
+	})
+
+	snapshot := task.snapshot()
+	if snapshot.Platform != "linux/arm64" {
+		t.Fatalf("unexpected platform after archive switch: %q", snapshot.Platform)
+	}
+	if snapshot.BytesDone != 0 || snapshot.BytesTotal != 0 || snapshot.CurrentLayer != 0 || snapshot.TotalLayers != 0 {
+		t.Fatalf("archive switch retained stale counters: %+v", snapshot)
+	}
+	if snapshot.SpeedBPS != 0 || snapshot.ETASeconds != 0 {
+		t.Fatalf("archive switch retained stale rate: %+v", snapshot)
+	}
+}
+
+func TestSyncResultOutputsUsesRemotePOSIXQuoting(t *testing.T) {
+	result := syncJobResult{Items: []syncJobItemResult{{Export: &exportReport{Archives: []exportedArchive{{
+		Result: saveResult{AbsPath: "/srv/archive/team's image.tar"},
+	}}}}}}
+	_, commands := syncResultOutputs(result)
+	if len(commands) != 1 || commands[0] != `docker load -i '/srv/archive/team'"'"'s image.tar'` {
+		t.Fatalf("unexpected remote load command: %v", commands)
 	}
 }
 

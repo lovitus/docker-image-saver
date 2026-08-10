@@ -50,8 +50,10 @@ type saveManifestEntry struct {
 }
 
 const (
-	maxCachedBlobSize  = 64 << 20
-	maxCachedBlobBytes = 256 << 20
+	maxCachedBlobSize    = 64 << 20
+	maxCachedBlobBytes   = 64 << 20
+	maxConfigCacheBytes  = 32 << 20
+	maxZstdDecoderMemory = 256 << 20
 )
 
 type progressEvent struct {
@@ -92,11 +94,12 @@ func (h *exportHooks) emit(event progressEvent) {
 }
 
 type exportSession struct {
-	mu            sync.Mutex
-	configCache   map[string][]byte
-	blobCache     map[string]*cachedBlob
-	blobCacheList *list.List
-	blobCacheSize int64
+	mu              sync.Mutex
+	configCache     map[string][]byte
+	configCacheSize int64
+	blobCache       map[string]*cachedBlob
+	blobCacheList   *list.List
+	blobCacheSize   int64
 }
 
 type cachedBlob struct {
@@ -191,8 +194,21 @@ func exportSelectedPlatforms(
 	outputPath string,
 	hooks *exportHooks,
 ) (exportReport, error) {
+	return exportSelectedPlatformsAs(client, ref, ref, singleManifest, platforms, selected, outputPath, hooks)
+}
+
+func exportSelectedPlatformsAs(
+	client *registryClient,
+	sourceRef imageRef,
+	archiveRef imageRef,
+	singleManifest *imageManifest,
+	platforms []platformOption,
+	selected []int,
+	outputPath string,
+	hooks *exportHooks,
+) (exportReport, error) {
 	report := exportReport{
-		Image:      ref.DisplayTag(),
+		Image:      archiveRef.DisplayTag(),
 		OutputBase: filepath.Clean(outputPath),
 	}
 	if len(selected) == 0 {
@@ -214,6 +230,21 @@ func exportSelectedPlatforms(
 		if err := os.MkdirAll(filepath.Dir(filepath.Clean(outPath)), 0o755); err != nil {
 			return report, fmt.Errorf("create output directory: %w", err)
 		}
+		tempFile, err := os.CreateTemp(filepath.Dir(filepath.Clean(outPath)), "."+filepath.Base(outPath)+"-*.part")
+		if err != nil {
+			return report, fmt.Errorf("create temporary archive: %w", err)
+		}
+		tempPath := tempFile.Name()
+		if err := tempFile.Close(); err != nil {
+			_ = os.Remove(tempPath)
+			return report, fmt.Errorf("close temporary archive: %w", err)
+		}
+		archiveFinalized := false
+		defer func() {
+			if !archiveFinalized {
+				_ = os.Remove(tempPath)
+			}
+		}()
 		if len(selected) > 1 {
 			hooks.logf("\nSaving archive for %s -> %s\n", platforms[idx].Platform.String(), outPath)
 		}
@@ -222,7 +253,18 @@ func exportSelectedPlatforms(
 			Platform: platforms[idx].Platform.String(),
 			Message:  outPath,
 		})
-		expectation, err := writeDockerTar(client, session, ref, singleManifest, platforms, []int{idx}, outPath, hooks)
+		expectation, err := writeDockerTar(
+			client,
+			session,
+			sourceRef,
+			archiveRef,
+			singleManifest,
+			platforms,
+			[]int{idx},
+			len(selected) > 1,
+			tempPath,
+			hooks,
+		)
 		if err != nil {
 			return report, err
 		}
@@ -231,9 +273,13 @@ func exportSelectedPlatforms(
 			Platform: platforms[idx].Platform.String(),
 			Message:  "validating archive",
 		})
-		if err := validateDockerArchiveWithExpectation(outPath, expectation); err != nil {
+		if err := validateDockerArchiveWithExpectation(tempPath, expectation); err != nil {
 			return report, fmt.Errorf("validate archive %s: %w", outPath, err)
 		}
+		if err := replaceFile(tempPath, outPath); err != nil {
+			return report, fmt.Errorf("finalize archive %s: %w", outPath, err)
+		}
+		archiveFinalized = true
 		result, err := summarizeSavedFile(outPath)
 		if err != nil {
 			return report, err
@@ -312,31 +358,73 @@ func resolvePlatforms(client *registryClient, ref imageRef) ([]platformOption, *
 		if err := json.Unmarshal(manifestBody, &m); err != nil {
 			return nil, nil, fmt.Errorf("parse image manifest: %w", err)
 		}
-		return []platformOption{{ManifestRef: ref.ManifestReference(), Platform: platform{OS: "linux", Architecture: "unknown"}}}, &m, nil
+		manifestPlatform, err := resolveSingleManifestPlatform(client, ref, m.Config)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []platformOption{{ManifestRef: ref.ManifestReference(), Platform: manifestPlatform}}, &m, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported top-level media type: %s", mediaType)
 	}
 }
 
+func resolveSingleManifestPlatform(client *registryClient, ref imageRef, config descriptor) (platform, error) {
+	if strings.TrimSpace(config.Digest) == "" {
+		return platform{}, fmt.Errorf("image manifest is missing its config digest")
+	}
+	data, _, err := client.getBlobDescriptor(ref, config)
+	if err != nil {
+		return platform{}, fmt.Errorf("read image platform from config: %w", err)
+	}
+	var metadata struct {
+		Architecture string `json:"architecture"`
+		OS           string `json:"os"`
+		Variant      string `json:"variant"`
+		OSVersion    string `json:"os.version"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return platform{}, fmt.Errorf("read image platform from config: %w", err)
+	}
+	metadata.OS = strings.TrimSpace(metadata.OS)
+	metadata.Architecture = strings.TrimSpace(metadata.Architecture)
+	if metadata.OS == "" {
+		metadata.OS = "unknown"
+	}
+	if metadata.Architecture == "" {
+		metadata.Architecture = "unknown"
+	}
+	return platform{
+		OS: metadata.OS, Architecture: metadata.Architecture,
+		Variant: strings.TrimSpace(metadata.Variant), OSVersion: strings.TrimSpace(metadata.OSVersion),
+	}, nil
+}
+
 func writeDockerTar(
 	client *registryClient,
 	session *exportSession,
-	ref imageRef,
+	sourceRef imageRef,
+	archiveRef imageRef,
 	singleManifest *imageManifest,
 	platforms []platformOption,
 	selected []int,
+	addPlatformTag bool,
 	outputPath string,
 	hooks *exportHooks,
-) (archiveValidationExpectation, error) {
-	expectation := archiveValidationExpectation{ConfigDigests: make(map[string]string)}
+) (expectation archiveValidationExpectation, resultErr error) {
+	expectation = archiveValidationExpectation{ConfigDigests: make(map[string]string)}
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return expectation, fmt.Errorf("create output tar: %w", err)
 	}
-	defer outFile.Close()
-
 	tw := tar.NewWriter(outFile)
-	defer tw.Close()
+	defer func() {
+		if err := tw.Close(); resultErr == nil && err != nil {
+			resultErr = fmt.Errorf("close output tar: %w", err)
+		}
+		if err := outFile.Close(); resultErr == nil && err != nil {
+			resultErr = fmt.Errorf("close output archive: %w", err)
+		}
+	}()
 
 	entries := make([]saveManifestEntry, 0, len(selected))
 	repos := make(map[string]map[string]string)
@@ -344,7 +432,7 @@ func writeDockerTar(
 	writtenConfig := make(map[string]bool)
 	writtenLayers := make(map[string]bool)
 
-	multipleSelection := len(selected) > 1
+	multipleSelection := addPlatformTag || len(selected) > 1
 	for i, idx := range selected {
 		if idx < 0 || idx >= len(platforms) {
 			return expectation, fmt.Errorf("selected index %d out of range", idx+1)
@@ -361,7 +449,7 @@ func writeDockerTar(
 		if singleManifest != nil {
 			manifest = *singleManifest
 		} else {
-			data, _, err := client.getManifestDescriptor(ref, descriptor{
+			data, _, err := client.getManifestDescriptor(sourceRef, descriptor{
 				Digest: p.ManifestRef,
 				Size:   p.Size,
 			})
@@ -380,8 +468,11 @@ func writeDockerTar(
 		if configDigest == "" {
 			return expectation, fmt.Errorf("manifest for %s missing config digest", p.Platform.String())
 		}
+		if err := validateReferenceDigest(configDigest); err != nil {
+			return expectation, fmt.Errorf("manifest for %s has invalid config digest: %w", p.Platform.String(), err)
+		}
 		configName := digestHex(configDigest) + ".json"
-		configBytes, _, err := session.getConfigDescriptor(client, ref, manifest.Config)
+		configBytes, _, err := session.getConfigDescriptor(client, sourceRef, manifest.Config)
 		if err != nil {
 			return expectation, fmt.Errorf("download config %s: %w", configDigest, err)
 		}
@@ -393,13 +484,19 @@ func writeDockerTar(
 			writtenConfig[configName] = true
 		}
 
-		diffIDs := extractDiffIDs(configBytes)
-		if len(diffIDs) > 0 && len(diffIDs) != len(manifest.Layers) {
+		diffIDs, err := extractDiffIDs(configBytes)
+		if err != nil {
+			return expectation, fmt.Errorf("config rootfs for %s: %w", p.Platform.String(), err)
+		}
+		if len(diffIDs) != len(manifest.Layers) {
 			return expectation, fmt.Errorf("config diff_ids count mismatch for %s: got %d want %d", p.Platform.String(), len(diffIDs), len(manifest.Layers))
 		}
 		layerPaths := make([]string, 0, len(manifest.Layers))
 		parentID := ""
 		for li, layer := range manifest.Layers {
+			if err := validateReferenceDigest(layer.Digest); err != nil {
+				return expectation, fmt.Errorf("manifest layer %d for %s has invalid digest: %w", li+1, p.Platform.String(), err)
+			}
 			layerID := layerIDFrom(layer, diffIDs, li)
 			layerDir := layerID + "/"
 			layerTarPath := layerDir + "layer.tar"
@@ -427,7 +524,7 @@ func writeDockerTar(
 				if li < len(diffIDs) {
 					expectedDiffID = diffIDs[li]
 				}
-				if err := writeLayerToTar(tw, client, session, ref, p.Platform, layer, expectedDiffID, li+1, len(manifest.Layers), layerTarPath, hooks); err != nil {
+				if err := writeLayerToTar(tw, client, session, sourceRef, p.Platform, layer, expectedDiffID, li+1, len(manifest.Layers), layerTarPath, hooks); err != nil {
 					return expectation, err
 				}
 				writtenLayers[layerID] = true
@@ -436,7 +533,7 @@ func writeDockerTar(
 			parentID = layerID
 		}
 
-		repoName, tag := outputRepoAndTag(ref, p.Platform, multipleSelection)
+		repoName, tag := outputRepoAndTag(archiveRef, p.Platform, multipleSelection)
 		repoTag := repoName + ":" + tag
 		entries = append(entries, saveManifestEntry{
 			Config:   configName,
@@ -468,7 +565,7 @@ func writeDockerTar(
 }
 
 func (s *exportSession) getConfig(client *registryClient, ref imageRef, digest string) ([]byte, string, error) {
-	return s.getConfigDescriptor(client, ref, descriptor{Digest: digest})
+	return s.getConfigDescriptor(client, ref, descriptor{Digest: digest, Size: -1})
 }
 
 func (s *exportSession) getConfigDescriptor(client *registryClient, ref imageRef, desc descriptor) ([]byte, string, error) {
@@ -484,7 +581,10 @@ func (s *exportSession) getConfigDescriptor(client *registryClient, ref imageRef
 		return nil, "", err
 	}
 	s.mu.Lock()
-	s.configCache[desc.Digest] = data
+	if int64(len(data)) <= maxConfigCacheBytes && s.configCacheSize+int64(len(data)) <= maxConfigCacheBytes {
+		s.configCache[desc.Digest] = data
+		s.configCacheSize += int64(len(data))
+	}
 	s.mu.Unlock()
 	return data, contentType, nil
 }
@@ -807,7 +907,7 @@ func openLayerStreamFromReader(rc io.ReadCloser, contentType string, layer descr
 	buffered := bufio.NewReader(rc)
 	if magic, err := buffered.Peek(4); err == nil && len(magic) == 4 &&
 		magic[0] == 0x28 && magic[1] == 0xb5 && magic[2] == 0x2f && magic[3] == 0xfd {
-		decoder, err := zstd.NewReader(buffered)
+		decoder, err := zstd.NewReader(buffered, zstd.WithDecoderMaxMemory(maxZstdDecoderMemory))
 		if err != nil {
 			_ = rc.Close()
 			return layerStream{}, fmt.Errorf("create zstd reader: %w", err)
@@ -836,7 +936,7 @@ func openGzipLayerStream(rc io.ReadCloser) (layerStream, error) {
 }
 
 func openZstdLayerStream(rc io.ReadCloser) (layerStream, error) {
-	decoder, err := zstd.NewReader(rc)
+	decoder, err := zstd.NewReader(rc, zstd.WithDecoderMaxMemory(maxZstdDecoderMemory))
 	if err != nil {
 		_ = rc.Close()
 		return layerStream{}, fmt.Errorf("create zstd reader: %w", err)
@@ -889,16 +989,28 @@ func outputRepoAndTag(ref imageRef, p platform, addPlatform bool) (string, strin
 	return repoName, sanitizeTag(tag)
 }
 
-func extractDiffIDs(configJSON []byte) []string {
+func extractDiffIDs(configJSON []byte) ([]string, error) {
 	var cfg struct {
-		RootFS struct {
+		RootFS *struct {
+			Type    string   `json:"type"`
 			DiffIDs []string `json:"diff_ids"`
 		} `json:"rootfs"`
 	}
 	if err := json.Unmarshal(configJSON, &cfg); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode image config: %w", err)
 	}
-	return cfg.RootFS.DiffIDs
+	if cfg.RootFS == nil {
+		return nil, fmt.Errorf("image config is missing rootfs")
+	}
+	if cfg.RootFS.Type != "" && cfg.RootFS.Type != "layers" {
+		return nil, fmt.Errorf("unsupported rootfs type %q", cfg.RootFS.Type)
+	}
+	for index, digest := range cfg.RootFS.DiffIDs {
+		if err := validateReferenceDigest(digest); err != nil {
+			return nil, fmt.Errorf("diff_id %d is invalid: %w", index+1, err)
+		}
+	}
+	return cfg.RootFS.DiffIDs, nil
 }
 
 func layerIDFrom(layer descriptor, diffIDs []string, layerIndex int) string {
@@ -1085,7 +1197,11 @@ func validateDockerArchiveWithExpectation(path string, expectation archiveValida
 
 		switch {
 		case name == "manifest.json" || name == "repositories" || isTopLevelConfigJSON(name):
-			data, err := io.ReadAll(tr)
+			limit := int64(maxConfigBlobSize)
+			if name == "manifest.json" || name == "repositories" {
+				limit = maxManifestResponseSize
+			}
+			data, err := readAllLimited(tr, limit, "archive entry "+name)
 			if err != nil {
 				return fmt.Errorf("read archive entry %s: %w", name, err)
 			}
@@ -1480,7 +1596,7 @@ func writePlatformIndexFile(outputBase, image string, archives []exportedArchive
 	if err != nil {
 		return "", fmt.Errorf("encode platform index: %w", err)
 	}
-	if err := os.WriteFile(indexPath, append(data, '\n'), 0o644); err != nil {
+	if err := writeFileAtomic(indexPath, append(data, '\n'), 0o644); err != nil {
 		return "", fmt.Errorf("write platform index file: %w", err)
 	}
 	abs, err := filepath.Abs(indexPath)
