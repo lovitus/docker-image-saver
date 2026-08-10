@@ -161,7 +161,9 @@ chmod +x dia_linux_arm64
 
 ## 开发门禁
 
-本地只允许代码检查以及语法、格式校验。单元/集成测试、竞态检测、`go vet`、交叉编译、打包、校验和生成与 Release 发布必须全部在 GitHub Actions 中完成。所有变更必须通过 Pull Request 进入 `main`，且 `quality` 与 `cross-build` 两项必需检查均通过后才能合并。
+本地只允许代码检查以及语法、格式校验。单元测试、竞态检测、`go vet`、交叉编译、打包、校验和生成与 Release 发布必须全部在 GitHub Actions 中完成。所有变更必须通过 Pull Request 进入 `main`，且 `quality` 与 `cross-build` 两项必需检查均通过后才能合并。
+
+SSH、Registry、Harbor、远端存储、代理和 `docker load` 等真实环境验证在维护者批准的内网机器隔离目录中执行。本机只通过 SSH 编排，不承载测试进程和镜像数据；私有地址与凭据不进入 GitHub Actions，也不写入仓库。内网验证只补充、不能替代 GitHub CI 门禁。
 
 完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，强制仓库策略见 [AGENTS.md](AGENTS.md)。
 

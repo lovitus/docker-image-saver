@@ -3,7 +3,7 @@
 ## Required workflow
 
 1. Create a branch and open a pull request against `main`.
-2. Perform only syntax and formatting checks locally. The repository does not accept local build or test results as release evidence.
+2. Perform only syntax and formatting checks locally. Maintainers may orchestrate isolated live-environment checks on approved private hosts over SSH, but those results do not replace CI or serve as release build evidence.
 3. Wait for the GitHub Actions `quality` and `cross-build` checks to pass.
 4. Merge without bypassing required checks.
 
@@ -18,6 +18,10 @@ git diff --check
 ```
 
 Unit tests, race detection, `go vet`, module reproducibility checks, and all supported target builds run only in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Private environment validation
+
+Registry/Harbor connectivity, SSH execution-machine behavior, remote storage, and `docker load` compatibility are validated on maintainer-approved private hosts instead of GitHub-hosted runners. The workstation may only use `ssh`, `scp`, or `rsync` to orchestrate an isolated remote directory. Execute only checksum-verified workflow artifacts, do not commit private host metadata or credentials, and do not write to production registries unless a maintainer explicitly identifies a test target.
 
 ## Releases
 

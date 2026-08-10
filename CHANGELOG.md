@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.3.1 - 2026-08-10
+
 ### Added
 
 - Added a recent-task picker and automatic reconnection to running GUI jobs after browser refresh.
@@ -10,6 +12,7 @@
 ### Changed
 
 - Sync, local export, image-list, and connection-setting save controls now reject duplicate submissions while requests are pending.
+- Live SSH, Registry, Harbor, remote-storage, and docker-load validation now runs only on approved private hosts; GitHub Actions remains the mandatory quality, cross-build, and release gate.
 
 ### Fixed
 
