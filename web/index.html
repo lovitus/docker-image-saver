@@ -170,6 +170,9 @@
     .task-head h3 { font-size: 18px; }
     .task-head p { margin: 6px 0 0; color: #b9c4bd; font-size: 12px; overflow-wrap: anywhere; }
     .task-body { padding: 16px; display: grid; gap: 14px; }
+    .task-picker { display: grid; gap: 6px; }
+    .task-picker-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+    .task-picker select { min-width: 0; padding: 8px 9px; font-size: 11px; }
     .progress { height: 12px; border-radius: 999px; overflow: hidden; background: var(--canvas-deep); }
     .progress > div { width: 0%; height: 100%; background: linear-gradient(90deg, var(--orange), var(--teal)); transition: width 180ms linear; }
     .task-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -178,6 +181,8 @@
     .task-stat strong { display: block; margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
     .task-log { max-height: 250px; overflow: auto; display: grid; gap: 7px; }
     .task-item { border-left: 3px solid var(--line); padding: 7px 9px; font-size: 11px; overflow-wrap: anywhere; background: rgba(255,255,255,.5); }
+    .task-command { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: start; }
+    .task-command pre { margin: 0; }
     .task-item.ok { border-color: var(--green); }
     .task-item.err { border-color: var(--red); }
     .status-ok { color: var(--green) !important; }
@@ -439,6 +444,10 @@
     <aside class="task-rail">
       <div class="task-head"><h3 id="taskTitle">任务尚未开始</h3><p id="taskSummary">同步与导出进度会显示在这里。</p></div>
       <div class="task-body">
+        <div class="task-picker">
+          <span class="field-label">最近任务（完成后保留 10 分钟）</span>
+          <div class="task-picker-row"><select id="taskHistory" aria-label="最近任务"><option value="">暂无任务</option></select><button id="refreshTasks" class="btn secondary small" type="button">刷新</button></div>
+        </div>
         <div class="progress"><div id="taskProgress"></div></div>
         <div class="task-stats">
           <div class="task-stat"><span>stage</span><strong id="taskStage">idle</strong></div>
@@ -463,12 +472,14 @@
     const LOCAL_HARBOR_EXECUTION = '__local__';
     const $ = (id) => document.getElementById(id);
     const state = {
-      settings: { registries: [], credentials: [], remotes: [], image_lists: [], default_remote_id: '' },
-      currentTaskID: '', taskStream: null, taskPollTimer: null,
+      settings: { registries: [], credentials: [], remotes: [], image_lists: [], default_remote_id: '' }, settingsLoadSequence: 0,
+      tasks: [], taskListSequence: 0, taskTrackSequence: 0, currentTaskID: '', currentTaskStatus: '', taskStream: null, taskPollTimer: null,
       exportPlatforms: [], exportInspectionKey: '', exportInspectSequence: 0, exportOutputAutomatic: !bootstrap.output_explicit,
       currentListID: '', listDirty: false,
       harborProjects: [], harborRepositories: [], harborArtifacts: [],
-      harborProjectNextPage: 0, harborRepositoryNextPage: 0, harborArtifactNextPage: 0
+      harborProjectNextPage: 0, harborRepositoryNextPage: 0, harborArtifactNextPage: 0,
+      harborProjectSequence: 0, harborRepositorySequence: 0, harborArtifactSequence: 0,
+      fileLoadSequence: 0, storageLoadSequence: 0, syncStorageSequence: 0
     };
     $('topVersion').textContent = bootstrap.version || 'dev';
 
@@ -508,6 +519,17 @@
       }
       return payload;
     }
+    async function withButtonBusy(button, busyText, operation, related = []) {
+      const controls = [button, ...related];
+      if (controls.some((control) => control.dataset.busy === 'true')) return;
+      const states = controls.map((control) => ({ control, disabled: control.disabled, text: control.textContent }));
+      controls.forEach((control) => { control.dataset.busy = 'true'; control.disabled = true; control.setAttribute('aria-busy', 'true'); });
+      if (busyText) button.textContent = busyText;
+      try { return await operation(); }
+      finally {
+        states.forEach(({ control, disabled, text }) => { control.disabled = disabled; control.textContent = text; control.dataset.busy = 'false'; control.removeAttribute('aria-busy'); });
+      }
+    }
     function formatBytes(value) {
       const size = Number(value || 0); if (!size) return '0 B';
       const units = ['B','KiB','MiB','GiB','TiB']; let current = size; let index = 0;
@@ -539,15 +561,30 @@
       select.value = Array.from(select.options).some((option) => option.value === old) ? old : fallback;
     }
 
-    function showPage(name) {
+    const pageNames = new Set(['sync', 'harbor', 'files', 'export', 'settings']);
+    function showPage(name, updateLocation = true) {
+      if (!pageNames.has(name)) name = 'sync';
       document.querySelectorAll('.page').forEach((page) => page.classList.toggle('active', page.id === `page-${name}`));
       document.querySelectorAll('.nav button').forEach((button) => button.classList.toggle('active', button.dataset.page === name));
+      if (updateLocation && window.location.hash !== `#${name}`) window.location.hash = name;
     }
     document.querySelectorAll('.nav button').forEach((button) => button.addEventListener('click', () => showPage(button.dataset.page)));
     $('goToLists').addEventListener('click', () => showPage('sync'));
+    window.addEventListener('hashchange', () => { const requested=window.location.hash.slice(1);showPage(requested,false);if(!pageNames.has(requested))window.history.replaceState(null,'','#sync'); });
+    const initialPage = window.location.hash.slice(1);
+    showPage(pageNames.has(initialPage) ? initialPage : 'sync', false);
+    if (!pageNames.has(initialPage)) window.history.replaceState(null, '', '#sync');
 
     async function loadSettings(preferred = {}) {
-      state.settings = await api('/api/settings');
+      const sequence = ++state.settingsLoadSequence;
+      const previousHarborIdentity = harborAccessIdentity();
+      const previousFileRemote = $('fileRemote').value;
+      const previousSyncRemote = $('syncRemote').value;
+      let settings;
+      try { settings = await api('/api/settings'); }
+      catch (error) { if (sequence !== state.settingsLoadSequence) return state.settings; throw error; }
+      if (sequence !== state.settingsLoadSequence) return state.settings;
+      state.settings = settings;
       const defaultRemote = state.settings.remotes.find((item) => item.id === state.settings.default_remote_id);
       $('topDefaultRemote').textContent = defaultRemote ? defaultRemote.name : '未设置';
       fillSelect($('syncRemote'), state.settings.remotes, '选择执行机', (item) => `${item.name}${item.id === state.settings.default_remote_id ? ' · 默认' : ''}`, preferred.remote || $('syncRemote').value || state.settings.default_remote_id);
@@ -569,6 +606,20 @@
       updateExportRegistryMode(); invalidateExportInspection();
       renderSettingsLists();
       renderImageListSelect(preferred.list || state.currentListID);
+      if (previousHarborIdentity !== harborAccessIdentity()) resetHarborBrowse();
+      if (previousFileRemote !== $('fileRemote').value) {
+        state.fileLoadSequence += 1; state.storageLoadSequence += 1;
+        $('filePath').value = ''; clear($('fileRows')); clear($('storageCards'));
+      }
+      if (previousSyncRemote !== $('syncRemote').value) {
+        state.syncStorageSequence += 1; $('syncStorageHint').classList.add('hidden');
+      }
+      if (state.tasks.length) {
+        renderTaskHistory(state.currentTaskID);
+        const currentTask = state.tasks.find((task) => task.id === state.currentTaskID);
+        if (currentTask) $('taskTitle').textContent = formatTaskTitle(currentTask);
+      }
+      return state.settings;
     }
 
     function renderImageListSelect(preferred) {
@@ -606,14 +657,14 @@
     });
     ['syncImageListName','syncImages'].forEach((id) => $(id).addEventListener('input', () => { state.listDirty = true; updateListState(); }));
     $('newImageList').addEventListener('click', async () => { if(state.listDirty&&!await askConfirm('放弃未保存修改','新建清单会清空当前未保存内容，是否继续？'))return;state.currentListID = ''; $('syncImageList').value = ''; $('syncImageListName').value = ''; $('syncImages').value = '# 每行一个镜像\n'; state.listDirty = true; updateListState(); });
-    $('saveImageList').addEventListener('click', async () => {
+    $('saveImageList').addEventListener('click', () => withButtonBusy($('saveImageList'), '正在保存…', async () => {
       try {
         const payload = { name: $('syncImageListName').value.trim(), content: $('syncImages').value };
         const method = state.currentListID ? 'PUT' : 'POST'; const suffix = state.currentListID ? `/${encodeURIComponent(state.currentListID)}` : '';
         const saved = await api(`/api/settings/image-lists${suffix}`, { method, body: payload });
         state.currentListID = saved.id; state.listDirty = false; toast('镜像清单已保存'); await loadSettings({ list: saved.id }); updateListState();
       } catch (error) { toast(error.message, true); }
-    });
+    }));
     $('deleteImageList').addEventListener('click', async () => {
       if (!state.currentListID || !await askConfirm('删除镜像清单', '只删除清单记录，不会删除任何镜像或 tar。')) return;
       try { await api(`/api/settings/image-lists/${encodeURIComponent(state.currentListID)}`, { method: 'DELETE' }); state.currentListID = ''; state.listDirty = false; $('syncImages').value = ''; await loadSettings(); toast('清单已删除'); } catch (error) { toast(error.message, true); }
@@ -621,6 +672,7 @@
 
     $('syncSourceRegistry').addEventListener('change', () => fillCredentialSelect('syncSourceCredential', $('syncSourceRegistry').value));
     $('syncTargetRegistry').addEventListener('change', () => fillCredentialSelect('syncTargetCredential', $('syncTargetRegistry').value));
+    $('syncRemote').addEventListener('change', () => { state.syncStorageSequence += 1; $('syncStorageHint').classList.add('hidden'); });
     $('harborRegistry').addEventListener('change', () => { fillCredentialSelect('harborCredential', $('harborRegistry').value); resetHarborBrowse(); });
     $('harborCredential').addEventListener('change', resetHarborBrowse);
     $('harborRemote').addEventListener('change', resetHarborBrowse);
@@ -638,18 +690,19 @@
     });
     $('probeSyncStorage').addEventListener('click', async () => {
       const id = $('syncRemote').value; if (!id) return toast('先选择执行机', true);
-      try { const disks = await api(`/api/remotes/${encodeURIComponent(id)}/storage`); const best = disks.find((disk) => disk.recommended) || disks[0]; $('syncStorageHint').classList.remove('hidden'); $('syncStorageHint').textContent = best ? `推荐 ${best.path} · 可用 ${formatBytes(best.available_bytes)} / ${formatBytes(best.total_bytes)}` : '没有可写分区'; } catch (error) { toast(error.message, true); }
+      const sequence = ++state.syncStorageSequence;
+      try { const disks = await api(`/api/remotes/${encodeURIComponent(id)}/storage`); if(sequence!==state.syncStorageSequence||id!==$('syncRemote').value)return;const best = disks.find((disk) => disk.recommended) || disks[0]; $('syncStorageHint').classList.remove('hidden'); $('syncStorageHint').textContent = best ? `推荐 ${best.path} · 可用 ${formatBytes(best.available_bytes)} / ${formatBytes(best.total_bytes)}` : '没有可写分区'; } catch (error) { if(sequence===state.syncStorageSequence&&id===$('syncRemote').value)toast(error.message, true); }
     });
-    $('startSync').addEventListener('click', async () => {
+    $('startSync').addEventListener('click', () => withButtonBusy($('startSync'), '正在提交…', async () => {
       try {
         const payload = {
           remote_id: $('syncRemote').value, source_registry_id: $('syncSourceRegistry').value, source_credential_id: $('syncSourceCredential').value,
           target_type: $('syncTargetType').value, target_registry_id: $('syncTargetRegistry').value, target_credential_id: $('syncTargetCredential').value,
           image_list_id: state.currentListID, images_content: $('syncImages').value, engine: $('syncEngine').value, output_root: $('syncOutputRoot').value.trim()
         };
-        const response = await api('/api/sync', { method: 'POST', body: payload }); subscribeTask(response.task_id, '镜像同步'); toast('同步任务已提交到执行机');
+        const response = await api('/api/sync', { method: 'POST', body: payload }); subscribeTask(response.task_id); toast('同步任务已提交到执行机');
       } catch (error) { toast(error.message, true); }
-    });
+    }));
 
     function renderSettingsLists() {
       renderRegistryList(); renderCredentialList(); renderRemoteList();
@@ -668,14 +721,14 @@
     }
     function editRegistry(item) { $('registryID').value=item.id; $('registryName').value=item.name; $('registryKind').value=item.kind; $('registryEndpoint').value=item.endpoint; $('registryNamespace').value=item.namespace||''; $('registryProxy').value=item.proxy||''; $('registryInsecure').checked=Boolean(item.insecure); }
     async function deleteRegistry(item) { if (!await askConfirm('删除 Registry 配置', `删除 ${item.name} 以及其全部账号记录？`)) return; try { await api(`/api/settings/registries/${encodeURIComponent(item.id)}`, {method:'DELETE'}); await loadSettings(); toast('站点记录已删除'); } catch(error){toast(error.message,true);} }
-    $('registryForm').addEventListener('submit', async (event) => { event.preventDefault(); try { const id=$('registryID').value; const body={name:$('registryName').value.trim(),kind:$('registryKind').value,endpoint:$('registryEndpoint').value.trim(),namespace:$('registryNamespace').value.trim(),proxy:$('registryProxy').value.trim(),insecure:$('registryInsecure').checked}; await api(`/api/settings/registries${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body}); resetRegistryForm(); await loadSettings(); toast('站点配置已保存'); } catch(error){toast(error.message,true);} });
+    $('registryForm').addEventListener('submit', (event) => { event.preventDefault(); const button=event.submitter||$('registryForm').querySelector('[type="submit"]'); withButtonBusy(button,'正在保存…',async()=>{try { const id=$('registryID').value; const body={name:$('registryName').value.trim(),kind:$('registryKind').value,endpoint:$('registryEndpoint').value.trim(),namespace:$('registryNamespace').value.trim(),proxy:$('registryProxy').value.trim(),insecure:$('registryInsecure').checked}; await api(`/api/settings/registries${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body}); resetRegistryForm(); await loadSettings(); toast('站点配置已保存'); } catch(error){toast(error.message,true);}}); });
     function resetRegistryForm(){ $('registryForm').reset(); $('registryID').value=''; $('registryKind').value='registry'; }
     $('resetRegistryForm').addEventListener('click', resetRegistryForm);
 
     function renderCredentialList(){ clear($('credentialList')); state.settings.credentials.forEach((item)=>{ const registry=state.settings.registries.find((entry)=>entry.id===item.registry_id); const info=node('div',{},node('strong',{text:item.name}),node('small',{text:`${registry?registry.name:'missing'} · ${item.username} · ${item.has_secret?'secret saved':'no secret'}`})); $('credentialList').appendChild(node('div',{class:'card-row'},info,rowActions(()=>editCredential(item),()=>deleteCredential(item)))); }); }
     function editCredential(item){ $('credentialID').value=item.id; $('credentialRegistry').value=item.registry_id; $('credentialName').value=item.name; $('credentialUsername').value=item.username; $('credentialSecret').value=''; $('credentialClearSecret').checked=false; }
     async function deleteCredential(item){ if(!await askConfirm('删除账号',`删除 ${item.name} 的已保存凭据？`))return; try{await api(`/api/settings/credentials/${encodeURIComponent(item.id)}`,{method:'DELETE'});await loadSettings();toast('账号已删除');}catch(error){toast(error.message,true);} }
-    $('credentialForm').addEventListener('submit',async(event)=>{event.preventDefault();try{const id=$('credentialID').value;const body={registry_id:$('credentialRegistry').value,name:$('credentialName').value.trim(),username:$('credentialUsername').value.trim()};if($('credentialClearSecret').checked)body.secret='';else if($('credentialSecret').value)body.secret=$('credentialSecret').value;await api(`/api/settings/credentials${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetCredentialForm();await loadSettings();toast('账号已保存');}catch(error){toast(error.message,true);}});
+    $('credentialForm').addEventListener('submit',(event)=>{event.preventDefault();const button=event.submitter||$('credentialForm').querySelector('[type="submit"]');withButtonBusy(button,'正在保存…',async()=>{try{const id=$('credentialID').value;const body={registry_id:$('credentialRegistry').value,name:$('credentialName').value.trim(),username:$('credentialUsername').value.trim()};if($('credentialClearSecret').checked)body.secret='';else if($('credentialSecret').value)body.secret=$('credentialSecret').value;await api(`/api/settings/credentials${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetCredentialForm();await loadSettings();toast('账号已保存');}catch(error){toast(error.message,true);}});});
     function resetCredentialForm(){ $('credentialForm').reset(); $('credentialID').value=''; }
     $('resetCredentialForm').addEventListener('click',resetCredentialForm);
 
@@ -683,25 +736,29 @@
     function editRemote(item){$('remoteID').value=item.id;$('remoteName').value=item.name;$('remoteAddress').value=item.address;$('remotePort').value=item.port||22;$('remoteUser').value=item.user;$('remoteAuth').value=item.auth_method;$('remoteKeyPath').value=item.key_path||'';$('remoteSecret').value='';$('remoteClearSecret').checked=false;$('remoteWorkspace').value=item.workspace;$('remoteDiaPath').value=item.dia_path||'';$('remoteStorageRoots').value=(item.storage_roots||[]).join('\n');}
     async function deleteRemote(item){if(!await askConfirm('删除执行机',`删除 ${item.name} 的 SSH 记录和 secret？`))return;try{await api(`/api/settings/remotes/${encodeURIComponent(item.id)}`,{method:'DELETE'});await loadSettings();toast('执行机已删除');}catch(error){toast(error.message,true);}}
     async function testRemote(item){try{let response;try{response=await api(`/api/remotes/${encodeURIComponent(item.id)}/test`,{method:'POST',body:{}});}catch(error){if(error.status===409&&error.payload&&error.payload.needs_confirmation){const fingerprint=error.payload.fingerprint;const accepted=await askConfirm('确认 SSH Host Key',`${item.name}\n${fingerprint}\n\n请与服务器管理员提供的指纹核对。`);if(!accepted)return;response=await api(`/api/remotes/${encodeURIComponent(item.id)}/test`,{method:'POST',body:{fingerprint}});}else throw error;}toast(`连接成功：${response.info.os}/${response.info.architecture} · dia ${response.info.version}`);await loadSettings();}catch(error){toast(error.message,true);}}
-    $('remoteForm').addEventListener('submit',async(event)=>{event.preventDefault();try{const id=$('remoteID').value;const body={name:$('remoteName').value.trim(),address:$('remoteAddress').value.trim(),port:Number($('remotePort').value||22),user:$('remoteUser').value.trim(),auth_method:$('remoteAuth').value,key_path:$('remoteKeyPath').value.trim(),workspace:$('remoteWorkspace').value.trim(),dia_path:$('remoteDiaPath').value.trim(),storage_roots:$('remoteStorageRoots').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};if($('remoteClearSecret').checked)body.secret='';else if($('remoteSecret').value)body.secret=$('remoteSecret').value;const saved=await api(`/api/settings/remotes${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetRemoteForm();await loadSettings({remote:saved.id});toast('执行机已保存，请执行连接测试');}catch(error){toast(error.message,true);}});
+    $('remoteForm').addEventListener('submit',(event)=>{event.preventDefault();const button=event.submitter||$('remoteForm').querySelector('[type="submit"]');withButtonBusy(button,'正在保存…',async()=>{try{const id=$('remoteID').value;const body={name:$('remoteName').value.trim(),address:$('remoteAddress').value.trim(),port:Number($('remotePort').value||22),user:$('remoteUser').value.trim(),auth_method:$('remoteAuth').value,key_path:$('remoteKeyPath').value.trim(),workspace:$('remoteWorkspace').value.trim(),dia_path:$('remoteDiaPath').value.trim(),storage_roots:$('remoteStorageRoots').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)};if($('remoteClearSecret').checked)body.secret='';else if($('remoteSecret').value)body.secret=$('remoteSecret').value;const saved=await api(`/api/settings/remotes${id?`/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body});resetRemoteForm();await loadSettings({remote:saved.id});toast('执行机已保存，请执行连接测试');}catch(error){toast(error.message,true);}});});
     function resetRemoteForm(){$('remoteForm').reset();$('remoteID').value='';$('remotePort').value='22';$('remoteAuth').value='agent';$('remoteWorkspace').value='~/.local/share/dia';}
     $('resetRemoteForm').addEventListener('click',resetRemoteForm);
 
     function harborPayload(action){const route=$('harborRemote').value;return{registry_id:$('harborRegistry').value,credential_id:$('harborCredential').value,execution:route===LOCAL_HARBOR_EXECUTION?'local':'remote',remote_id:route===LOCAL_HARBOR_EXECUTION?'':route,action};}
     async function harborAction(action){return api('/api/harbor',{method:'POST',body:harborPayload(action)});}
-    function resetHarborBrowse(){state.harborProjects=[];state.harborRepositories=[];state.harborArtifacts=[];state.harborProjectNextPage=0;state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborProject'));clear($('harborRepository'));clear($('artifactRows'));$('artifactCaption').textContent='选择项目和仓库后加载。';$('loadMoreProjects').disabled=true;$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}
+    function harborAccessIdentity(){return JSON.stringify({registry:$('harborRegistry').value,credential:$('harborCredential').value,remote:$('harborRemote').value});}
+    function resetHarborBrowse(){state.harborProjectSequence+=1;state.harborRepositorySequence+=1;state.harborArtifactSequence+=1;state.harborProjects=[];state.harborRepositories=[];state.harborArtifacts=[];state.harborProjectNextPage=0;state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborProject'));clear($('harborRepository'));clear($('artifactRows'));$('artifactCaption').textContent='选择项目和仓库后加载。';$('loadMoreProjects').disabled=true;$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}
     function repositoryResourceName(item,project){const name=String(item.resource_name||item.name||'').replace(/^\/+|\/+$/g,'');const prefix=`${project}/`;return name.startsWith(prefix)?name.slice(prefix.length):name;}
+    function harborProjectChanged(){state.harborRepositorySequence+=1;state.harborArtifactSequence+=1;state.harborRepositories=[];state.harborArtifacts=[];state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborRepository'));clear($('artifactRows'));$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;$('artifactCaption').textContent='选择仓库后加载。';if($('harborProject').value)loadHarborRepositories(false);}
+    function harborRepositoryChanged(){state.harborArtifactSequence+=1;state.harborArtifacts=[];state.harborArtifactNextPage=0;clear($('artifactRows'));$('loadMoreArtifacts').disabled=true;$('artifactCaption').textContent='选择仓库后加载。';if($('harborRepository').value)loadArtifacts(false);}
     $('harborHealth').addEventListener('click',async()=>{try{const result=await harborAction({action:'health'});$('harborHealthResult').classList.remove('hidden');$('harborHealthResult').textContent=`Harbor ${result.status} · ${(result.components||[]).map(item=>`${item.name}:${item.status}`).join(' · ')}`;}catch(error){toast(error.message,true);}});
     $('loadProjects').addEventListener('click',()=>loadHarborProjects(false));
     $('loadMoreProjects').addEventListener('click',()=>loadHarborProjects(true));
-    async function loadHarborProjects(append=false){try{const page=append?state.harborProjectNextPage:1;if(!page)return;const selected=$('harborProject').value;const result=await harborAction({action:'list_projects',page,page_size:100});state.harborProjects=append?mergeUnique(state.harborProjects,result.items||[],item=>item.name):(result.items||[]);fillSelect($('harborProject'),state.harborProjects,'选择项目',(item)=>`${item.name} · ${item.repo_count} repos`,selected,(item)=>item.name);state.harborProjectNextPage=result.next_page||0;$('loadMoreProjects').disabled=!state.harborProjectNextPage;if(!append){state.harborRepositories=[];state.harborArtifacts=[];state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborRepository'));clear($('artifactRows'));$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}$('artifactCaption').textContent='选择项目和仓库后加载。';toast(`已加载 ${state.harborProjects.length} / ${result.total||state.harborProjects.length} 个项目`);}catch(error){toast(error.message,true);}}
-    $('harborProject').addEventListener('change',()=>loadHarborRepositories(false));
+    async function loadHarborProjects(append=false){const sequence=++state.harborProjectSequence,identity=harborAccessIdentity();try{const page=append?state.harborProjectNextPage:1;if(!page)return;const selected=$('harborProject').value;const result=await harborAction({action:'list_projects',page,page_size:100});if(sequence!==state.harborProjectSequence||identity!==harborAccessIdentity())return;state.harborProjects=append?mergeUnique(state.harborProjects,result.items||[],item=>item.name):(result.items||[]);fillSelect($('harborProject'),state.harborProjects,'选择项目',(item)=>`${item.name} · ${item.repo_count} repos`,selected,(item)=>item.name);state.harborProjectNextPage=result.next_page||0;$('loadMoreProjects').disabled=!state.harborProjectNextPage;if(!append){state.harborRepositorySequence+=1;state.harborArtifactSequence+=1;state.harborRepositories=[];state.harborArtifacts=[];state.harborRepositoryNextPage=0;state.harborArtifactNextPage=0;clear($('harborRepository'));clear($('artifactRows'));$('loadMoreRepositories').disabled=true;$('loadMoreArtifacts').disabled=true;}$('artifactCaption').textContent='选择项目和仓库后加载。';toast(`已加载 ${state.harborProjects.length} / ${result.total||state.harborProjects.length} 个项目`);}catch(error){if(sequence===state.harborProjectSequence&&identity===harborAccessIdentity())toast(error.message,true);}}
+    $('harborProject').addEventListener('change',harborProjectChanged);
     $('loadMoreRepositories').addEventListener('click',()=>loadHarborRepositories(true));
-    async function loadHarborRepositories(append=false){const project=$('harborProject').value;if(!project)return;try{const page=append?state.harborRepositoryNextPage:1;if(!page)return;const selected=$('harborRepository').value;const result=await harborAction({action:'list_repositories',project,page,page_size:100});state.harborRepositories=append?mergeUnique(state.harborRepositories,result.items||[],item=>repositoryResourceName(item,project)):(result.items||[]);fillSelect($('harborRepository'),state.harborRepositories,'选择仓库',(item)=>`${item.name} · ${item.artifact_count}`,selected,(item)=>repositoryResourceName(item,project));state.harborRepositoryNextPage=result.next_page||0;$('loadMoreRepositories').disabled=!state.harborRepositoryNextPage;if(!append){state.harborArtifacts=[];state.harborArtifactNextPage=0;clear($('artifactRows'));$('loadMoreArtifacts').disabled=true;$('artifactCaption').textContent='选择仓库后加载。';}}catch(error){toast(error.message,true);}}
-    $('harborRepository').addEventListener('change',()=>loadArtifacts(false));
+    async function loadHarborRepositories(append=false){const project=$('harborProject').value;if(!project)return;const sequence=++state.harborRepositorySequence,identity=harborAccessIdentity();try{const page=append?state.harborRepositoryNextPage:1;if(!page)return;const selected=$('harborRepository').value;const result=await harborAction({action:'list_repositories',project,page,page_size:100});if(sequence!==state.harborRepositorySequence||identity!==harborAccessIdentity()||project!==$('harborProject').value)return;state.harborRepositories=append?mergeUnique(state.harborRepositories,result.items||[],item=>repositoryResourceName(item,project)):(result.items||[]);fillSelect($('harborRepository'),state.harborRepositories,'选择仓库',(item)=>`${item.name} · ${item.artifact_count}`,selected,(item)=>repositoryResourceName(item,project));state.harborRepositoryNextPage=result.next_page||0;$('loadMoreRepositories').disabled=!state.harborRepositoryNextPage;if(!append){state.harborArtifactSequence+=1;state.harborArtifacts=[];state.harborArtifactNextPage=0;clear($('artifactRows'));$('loadMoreArtifacts').disabled=true;$('artifactCaption').textContent='选择仓库后加载。';}}catch(error){if(sequence===state.harborRepositorySequence&&identity===harborAccessIdentity()&&project===$('harborProject').value)toast(error.message,true);}}
+    $('harborRepository').addEventListener('change',harborRepositoryChanged);
+    $('harborQuery').addEventListener('input',()=>{state.harborArtifactSequence+=1;});
     $('loadArtifacts').addEventListener('click',()=>loadArtifacts(false));
     $('loadMoreArtifacts').addEventListener('click',()=>loadArtifacts(true));
-    async function loadArtifacts(append=false){const project=$('harborProject').value,repository=$('harborRepository').value;if(!project||!repository)return toast('先选择项目和仓库',true);try{const page=append?state.harborArtifactNextPage:1;if(!page)return;const result=await harborAction({action:'list_artifacts',project,repository,query:$('harborQuery').value.trim(),page,page_size:100});state.harborArtifacts=append?mergeUnique(state.harborArtifacts,result.items||[],item=>item.digest):(result.items||[]);renderArtifacts(state.harborArtifacts);state.harborArtifactNextPage=result.next_page||0;$('loadMoreArtifacts').disabled=!state.harborArtifactNextPage;$('artifactCaption').textContent=`${project} / ${repository} · ${state.harborArtifacts.length} / ${result.total||state.harborArtifacts.length} artifacts`;}catch(error){toast(error.message,true);}}
+    async function loadArtifacts(append=false){const project=$('harborProject').value,repository=$('harborRepository').value,query=$('harborQuery').value.trim();if(!project||!repository)return toast('先选择项目和仓库',true);const sequence=++state.harborArtifactSequence,identity=harborAccessIdentity();try{const page=append?state.harborArtifactNextPage:1;if(!page)return;const result=await harborAction({action:'list_artifacts',project,repository,query,page,page_size:100});if(sequence!==state.harborArtifactSequence||identity!==harborAccessIdentity()||project!==$('harborProject').value||repository!==$('harborRepository').value||query!==$('harborQuery').value.trim())return;state.harborArtifacts=append?mergeUnique(state.harborArtifacts,result.items||[],item=>item.digest):(result.items||[]);renderArtifacts(state.harborArtifacts);state.harborArtifactNextPage=result.next_page||0;$('loadMoreArtifacts').disabled=!state.harborArtifactNextPage;$('artifactCaption').textContent=`${project} / ${repository} · ${state.harborArtifacts.length} / ${result.total||state.harborArtifacts.length} artifacts`;}catch(error){if(sequence===state.harborArtifactSequence&&identity===harborAccessIdentity()&&project===$('harborProject').value&&repository===$('harborRepository').value&&query===$('harborQuery').value.trim())toast(error.message,true);}}
     function renderArtifacts(items){clear($('artifactRows'));items.forEach((item)=>{const tags=node('div',{class:'row-actions'});(item.tags||[]).forEach((tag)=>tags.appendChild(node('button',{class:'tag tag-delete',type:'button',text:`${tag.name} ×`,title:`删除 Tag ${tag.name}`,onclick:()=>deleteArtifactTag(item,tag)})));if(!(item.tags||[]).length)tags.appendChild(node('small',{class:'muted',text:'untagged'}));const digest=node('div',{},node('div',{class:'mono',text:item.digest}),tags);const actions=node('div',{class:'row-actions'});actions.appendChild(node('button',{class:'btn secondary small',text:'加 Tag',onclick:()=>createArtifactTag(item)}));actions.appendChild(node('button',{class:'btn danger small',text:'删除',onclick:()=>deleteArtifact(item)}));$('artifactRows').appendChild(node('tr',{},node('td',{},digest),node('td',{text:item.type||item.media_type||'-'}),node('td',{text:formatBytes(item.size)}),node('td',{text:formatTime(item.push_time)}),node('td',{},actions)));});}
     async function createArtifactTag(item){const tag=window.prompt('新 Tag 名称');if(!tag)return;try{await harborAction({action:'create_tag',project:$('harborProject').value,repository:$('harborRepository').value,reference:item.digest,tag:tag.trim()});await loadArtifacts();toast('Tag 已创建');}catch(error){toast(error.message,true);}}
     async function deleteArtifactTag(item,tag){if(!await askConfirm('删除 Harbor Tag',`删除 ${tag.name}？制品内容只有在没有其他引用并执行 Harbor GC 后才会释放。`))return;try{await harborAction({action:'delete_tag',project:$('harborProject').value,repository:$('harborRepository').value,reference:item.digest,tag:tag.name});await loadArtifacts();toast('Tag 已删除');}catch(error){toast(error.message,true);}}
@@ -710,13 +767,14 @@
     $('deleteProject').addEventListener('click',async()=>{const project=$('harborProject').value;if(!project||!await askConfirm('删除 Harbor 项目',`永久删除项目 ${project}？项目必须为空且没有待处理任务。`))return;try{await harborAction({action:'delete_project',project});await loadHarborProjects();toast('项目已删除');}catch(error){toast(error.message,true);}});
     $('deleteRepository').addEventListener('click',async()=>{const project=$('harborProject').value,repository=$('harborRepository').value;if(!project||!repository||!await askConfirm('删除 Harbor 仓库',`永久删除 ${project}/${repository}？`))return;try{await harborAction({action:'delete_repository',project,repository});await loadHarborRepositories();toast('仓库已删除');}catch(error){toast(error.message,true);}});
 
-    $('loadFiles').addEventListener('click',loadRemoteFiles); $('fileRemote').addEventListener('change',()=>{clear($('fileRows'));clear($('storageCards'));});
-    async function loadRemoteFiles(pathOverride){const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);const remotePath=typeof pathOverride==='string'?pathOverride:$('filePath').value.trim();try{const entries=await api(`/api/remotes/${encodeURIComponent(remote)}/files?path=${encodeURIComponent(remotePath)}`);if(remotePath)$('filePath').value=remotePath;renderFiles(entries);}catch(error){toast(error.message,true);}}
-    function renderFiles(entries){clear($('fileRows'));entries.forEach((item)=>{const name=node('div',{},node('strong',{text:item.name}),node('small',{class:'muted mono',text:item.path}));const actions=node('div',{class:'row-actions'});if(item.directory){actions.appendChild(node('button',{class:'btn secondary small',text:'打开',onclick:()=>loadRemoteFiles(item.path)}));}else{const url=`/api/remotes/${encodeURIComponent($('fileRemote').value)}/download?path=${encodeURIComponent(item.path)}`;actions.appendChild(node('button',{class:'btn secondary small',text:'下载',onclick:()=>requestRemoteDownload(item,url)}),node('button',{class:'btn danger small',text:'删除',onclick:()=>deleteRemoteArchive(item)}));}
+    $('loadFiles').addEventListener('click',loadRemoteFiles); $('fileRemote').addEventListener('change',()=>{state.fileLoadSequence+=1;state.storageLoadSequence+=1;$('filePath').value='';clear($('fileRows'));clear($('storageCards'));}); $('filePath').addEventListener('input',()=>{state.fileLoadSequence+=1;});
+    function remoteParentPath(value){const clean=String(value||'').replace(/\/+$/,'');if(!clean)return'';const index=clean.lastIndexOf('/');return index>0?clean.slice(0,index):'/';}
+    async function loadRemoteFiles(pathOverride){const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);const remotePath=typeof pathOverride==='string'?pathOverride:$('filePath').value.trim(),sequence=++state.fileLoadSequence;try{const entries=await api(`/api/remotes/${encodeURIComponent(remote)}/files?path=${encodeURIComponent(remotePath)}`);if(sequence!==state.fileLoadSequence||remote!==$('fileRemote').value)return;let displayedPath=remotePath;if(!displayedPath&&entries.length)displayedPath=remoteParentPath(entries[0].path);if(displayedPath)$('filePath').value=displayedPath;renderFiles(entries);}catch(error){if(sequence===state.fileLoadSequence&&remote===$('fileRemote').value)toast(error.message,true);}}
+    function renderFiles(entries){clear($('fileRows'));if(!entries.length){$('fileRows').appendChild(node('tr',{},node('td',{colspan:'4',class:'muted',text:'目录为空'})));return;}entries.forEach((item)=>{const name=node('div',{},node('strong',{text:item.name}),node('small',{class:'muted mono',text:item.path}));const actions=node('div',{class:'row-actions'});if(item.directory){actions.appendChild(node('button',{class:'btn secondary small',text:'打开',onclick:()=>loadRemoteFiles(item.path)}));}else{const url=`/api/remotes/${encodeURIComponent($('fileRemote').value)}/download?path=${encodeURIComponent(item.path)}`;actions.appendChild(node('button',{class:'btn secondary small',text:'下载',onclick:()=>requestRemoteDownload(item,url)}),node('button',{class:'btn danger small',text:'删除',onclick:()=>deleteRemoteArchive(item)}));}
       const row=node('tr',{class:item.directory?'':'file-row',draggable:item.directory?'false':'true'},node('td',{},name),node('td',{text:item.directory?'目录':formatBytes(item.size)}),node('td',{text:formatTime(item.modified_at)}),node('td',{},actions));if(!item.directory)row.addEventListener('dragstart',(event)=>{const remote=state.settings.remotes.find((entry)=>entry.id===$('fileRemote').value);if(!window.confirm(`从 ${remote?remote.name:'执行机'} 传输 ${item.name}（${formatBytes(item.size)}）到本机？\n\n取消后不会读取文件内容。`)){event.preventDefault();return;}const url=new URL(`/api/remotes/${encodeURIComponent($('fileRemote').value)}/download?path=${encodeURIComponent(item.path)}`,window.location.href).href;event.dataTransfer.setData('DownloadURL',`application/x-tar:${item.name}:${url}`);event.dataTransfer.setData('text/uri-list',url);});$('fileRows').appendChild(row);});}
     async function requestRemoteDownload(item,url){const remote=state.settings.remotes.find((entry)=>entry.id===$('fileRemote').value);if(!await askConfirm('传输远程文件',`从 ${remote?remote.name:'执行机'} 下载 ${item.name}（${formatBytes(item.size)}）到本机？取消后不会读取文件内容。`))return;const link=node('a',{href:url,download:item.name});document.body.appendChild(link);link.click();link.remove();}
-    $('fileUp').addEventListener('click',()=>{const value=$('filePath').value.replace(/\/+$/,'');const index=value.lastIndexOf('/');const parent=index>0?value.slice(0,index):'/';$('filePath').value=parent;loadRemoteFiles(parent);});
-    $('loadStorage').addEventListener('click',async()=>{const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);try{const items=await api(`/api/remotes/${encodeURIComponent(remote)}/storage`);clear($('storageCards'));items.forEach((item)=>$('storageCards').appendChild(node('div',{class:'task-stat'},node('span',{text:item.recommended?'recommended':'storage'}),node('strong',{text:item.path}),node('small',{class:'muted',text:`${formatBytes(item.available_bytes)} free / ${formatBytes(item.total_bytes)}`}))));}catch(error){toast(error.message,true);}});
+    $('fileUp').addEventListener('click',()=>{const value=$('filePath').value.trim();if(!value)return toast('先加载或输入一个远程目录',true);const parent=remoteParentPath(value);if(!parent||parent===value)return toast('已经到达可浏览路径顶部',true);loadRemoteFiles(parent);});
+    $('loadStorage').addEventListener('click',async()=>{const remote=$('fileRemote').value;if(!remote)return toast('选择执行机',true);const sequence=++state.storageLoadSequence;try{const items=await api(`/api/remotes/${encodeURIComponent(remote)}/storage`);if(sequence!==state.storageLoadSequence||remote!==$('fileRemote').value)return;clear($('storageCards'));items.forEach((item)=>$('storageCards').appendChild(node('div',{class:'task-stat'},node('span',{text:item.recommended?'recommended':'storage'}),node('strong',{text:item.path}),node('small',{class:'muted',text:`${formatBytes(item.available_bytes)} free / ${formatBytes(item.total_bytes)}`}),node('button',{class:'btn secondary small',type:'button',text:'浏览',onclick:()=>loadRemoteFiles(item.path)}))));}catch(error){if(sequence===state.storageLoadSequence&&remote===$('fileRemote').value)toast(error.message,true);}});
     async function deleteRemoteArchive(item){if(!await askConfirm('删除远程文件',`在执行机上永久删除 ${item.path}？`))return;try{await api(`/api/remotes/${encodeURIComponent($('fileRemote').value)}/files`,{method:'DELETE',body:{path:item.path}});await loadRemoteFiles();toast('远程文件已删除');}catch(error){toast(error.message,true);}}
 
     $('exportImage').value=bootstrap.image||'alpine:latest';$('exportOutput').value=bootstrap.output||'';$('exportProxy').value=bootstrap.proxy||'';$('exportUsername').value=bootstrap.username||'';$('exportInsecure').checked=Boolean(bootstrap.insecure);
@@ -733,22 +791,36 @@
     $('exportUseSavedPassword').addEventListener('change',()=>invalidateExportInspection());
     $('exportUseSavedProxy').addEventListener('change',()=>invalidateExportInspection());
     $('exportCredential').addEventListener('change',()=>invalidateExportInspection());
-    $('inspectExport').addEventListener('click',()=>inspectExport(state.exportPlatforms.length?selectedExportManifests():null));
+    $('inspectExport').addEventListener('click',()=>withButtonBusy($('inspectExport'),'正在检查…',async()=>{try{await inspectExport(state.exportPlatforms.length?selectedExportManifests():null);}catch(_){}},[$('startExport')]));
     async function inspectExport(preservedSelection=null){const requestIdentity=exportRequestIdentity(),sequence=++state.exportInspectSequence;try{const payload=exportPayload();delete payload.output;const result=await api('/api/inspect',{method:'POST',body:payload});if(sequence!==state.exportInspectSequence||requestIdentity!==exportRequestIdentity())throw new Error('检查期间输入已改变，请重新检查');if(state.exportOutputAutomatic||!$('exportOutput').value.trim()){$('exportOutput').value=result.default_output;state.exportOutputAutomatic=true;}state.exportPlatforms=result.platforms||[];const available=new Set(state.exportPlatforms.map((platform)=>platform.manifest_ref));const matched=preservedSelection?new Set(Array.from(preservedSelection).filter((value)=>available.has(value))):null;const keepSelection=matched&&matched.size>0;clear($('exportPlatforms'));state.exportPlatforms.forEach((platform)=>{const checkbox=node('input',{type:'checkbox'});checkbox.checked=keepSelection?matched.has(platform.manifest_ref):true;checkbox.dataset.manifestRef=platform.manifest_ref;const label=node('label',{class:'platform-option'},checkbox,node('span',{text:`${platform.display_index}. ${platform.label}`}));$('exportPlatforms').appendChild(label);});state.exportInspectionKey=requestIdentity;toast(`发现 ${state.exportPlatforms.length} 个架构`);return result;}catch(error){toast(error.message,true);throw error;}}
-    $('startExport').addEventListener('click',async()=>{try{if(!state.exportPlatforms.length)await inspectExport();else if(state.exportInspectionKey!==exportRequestIdentity())await inspectExport(selectedExportManifests());const selected=Array.from(selectedExportManifests());if(!selected.length)throw new Error('至少选择一个平台');const response=await api('/api/export',{method:'POST',body:{...exportPayload(),selected}});subscribeTask(response.task_id,'单镜像导出');}catch(error){toast(error.message,true);}});
+    $('startExport').addEventListener('click',()=>withButtonBusy($('startExport'),'正在提交…',async()=>{try{if(!state.exportPlatforms.length)await inspectExport();else if(state.exportInspectionKey!==exportRequestIdentity())await inspectExport(selectedExportManifests());const selected=Array.from(selectedExportManifests());if(!selected.length)throw new Error('至少选择一个平台');const response=await api('/api/export',{method:'POST',body:{...exportPayload(),selected}});subscribeTask(response.task_id);}catch(error){toast(error.message,true);}},[$('inspectExport')]));
     updateExportRegistryMode();
 
-    function subscribeTask(taskID,title){state.currentTaskID=taskID;$('taskTitle').textContent=title;$('cancelTask').disabled=false;if(state.taskStream)state.taskStream.close();if(state.taskPollTimer)clearTimeout(state.taskPollTimer);state.taskStream=new EventSource(`/api/tasks/${encodeURIComponent(taskID)}/events`);state.taskStream.onmessage=(event)=>renderTask(JSON.parse(event.data));state.taskStream.onerror=()=>{state.taskStream.close();state.taskStream=null;pollTask(taskID);};}
-    async function pollTask(taskID){try{const task=await api(`/api/tasks/${encodeURIComponent(taskID)}`);renderTask(task);if(!isTerminal(task.status))state.taskPollTimer=setTimeout(()=>pollTask(taskID),1500);}catch(error){$('taskSummary').textContent=`任务状态读取失败：${error.message}`;state.taskPollTimer=setTimeout(()=>pollTask(taskID),2500);}}
     function isTerminal(status){return['done','failed','canceled'].includes(status);}
-    function renderTask(task){const total=Number(task.bytes_total||0),done=Number(task.bytes_done||0);$('taskProgress').style.width=`${total?Math.min(100,done/total*100):(task.status==='done'?100:0)}%`;$('taskSummary').textContent=`${task.status||'running'}${task.message?` · ${task.message}`:''}`;$('taskSummary').className=task.status==='done'?'status-ok':task.status==='failed'?'status-bad':'';$('taskStage').textContent=task.stage||'-';$('taskPlatform').textContent=task.platform||'-';$('taskItem').textContent=task.total_images?`${task.current_image||0}/${task.total_images} images${task.total_layers?` · ${task.current_layer||0}/${task.total_layers} blobs`:''}`:task.total_layers?`${task.current_layer||0}/${task.total_layers}`:'-';$('taskRate').textContent=task.speed_bps?`${formatBytes(task.speed_bps)}/s${task.eta_seconds?` · ETA ${task.eta_seconds}s`:''}`:'-';clear($('taskOutputs'));(task.output_files||[]).forEach((value)=>$('taskOutputs').appendChild(node('div',{class:'task-item ok',text:value})));if(task.sync_result)(task.sync_result.items||[]).forEach((item)=>$('taskOutputs').appendChild(node('div',{class:`task-item ${item.status==='done'?'ok':'err'}`,text:`${item.status} · ${item.source}${item.target?` → ${item.target}`:''}${item.error?` · ${item.error}`:''}`})));clear($('taskCommands'));(task.docker_load_commands||[]).forEach((value)=>$('taskCommands').appendChild(node('pre',{class:'task-item mono',text:value})));$('taskError').classList.toggle('hidden',!task.error);$('taskError').textContent=task.error||'';if(isTerminal(task.status)){if(state.taskStream){state.taskStream.close();state.taskStream=null;}$('cancelTask').disabled=true;}}
-    $('cancelTask').addEventListener('click',async()=>{if(!state.currentTaskID||!await askConfirm('取消远程任务','当前网络请求会被中断；已完成的最终文件保持不变，未完成的临时文件不会替换正式 tar。'))return;try{await api(`/api/tasks/${encodeURIComponent(state.currentTaskID)}/cancel`,{method:'POST'});toast('已发送取消请求');}catch(error){toast(error.message,true);}});
+    function taskKind(task){return task&&task.input&&task.input.kind==='sync'?'镜像同步':'单镜像导出';}
+    function taskStatusLabel(status){return({running:'运行中',canceling:'取消中',done:'已完成',failed:'失败',canceled:'已取消'})[status]||status||'运行中';}
+    function taskContext(task){if(task&&task.input&&task.input.image)return task.input.image;if(!task||!task.input)return'';const remote=state.settings.remotes.find((item)=>item.id===task.input.remote_id);const list=state.settings.image_lists.find((item)=>item.id===task.input.image_list_id);return [list&&list.name,remote&&remote.name].filter(Boolean).join(' · ');}
+    function formatTaskTitle(task){const detail=taskContext(task);return `${taskKind(task)}${detail?` · ${detail}`:''}`;}
+    function taskOptionLabel(task){return `${taskStatusLabel(task.status)} · ${formatTaskTitle(task)} · ${formatTime(task.updated_at)}`;}
+    function stopTaskTracking(){state.taskTrackSequence+=1;if(state.taskStream){state.taskStream.close();state.taskStream=null;}if(state.taskPollTimer){clearTimeout(state.taskPollTimer);state.taskPollTimer=null;}}
+    function renderTaskHistory(preferredID=''){const select=$('taskHistory');clear(select);if(!state.tasks.length){select.appendChild(node('option',{value:'',text:'暂无任务'}));select.disabled=true;return;}select.disabled=false;state.tasks.forEach((task)=>select.appendChild(node('option',{value:task.id,text:taskOptionLabel(task)})));const selected=preferredID||state.currentTaskID;if(state.tasks.some((task)=>task.id===selected))select.value=selected;}
+    async function refreshTaskHistory(preferredID=''){const sequence=++state.taskListSequence;let tasks;try{tasks=await api('/api/tasks');}catch(error){if(sequence!==state.taskListSequence)return state.tasks;throw error;}if(sequence!==state.taskListSequence)return state.tasks;state.tasks=tasks;renderTaskHistory(state.currentTaskID||preferredID);return state.tasks;}
+    function resetTaskPanel(){stopTaskTracking();state.currentTaskID='';state.currentTaskStatus='';$('taskTitle').textContent='任务尚未开始';$('taskSummary').textContent='同步与导出进度会显示在这里。';$('taskSummary').className='';$('taskProgress').style.width='0%';$('taskStage').textContent='idle';$('taskPlatform').textContent='-';$('taskItem').textContent='-';$('taskRate').textContent='-';clear($('taskOutputs'));clear($('taskCommands'));$('taskError').classList.add('hidden');$('taskError').textContent='';$('cancelTask').disabled=true;}
+    async function restoreTask(){const tasks=await refreshTaskHistory();if(state.currentTaskID)return;const task=tasks.find((item)=>!isTerminal(item.status))||tasks[0];if(!task){resetTaskPanel();return;}if(isTerminal(task.status)){stopTaskTracking();state.currentTaskID=task.id;renderTask(task);return;}subscribeTask(task.id);}
+    function subscribeTask(taskID){stopTaskTracking();const trackingSequence=state.taskTrackSequence;state.currentTaskID=taskID;state.currentTaskStatus='';const known=state.tasks.find((task)=>task.id===taskID);$('taskTitle').textContent=known?formatTaskTitle(known):'正在连接任务';$('cancelTask').disabled=false;const stream=new EventSource(`/api/tasks/${encodeURIComponent(taskID)}/events`);state.taskStream=stream;stream.onmessage=(event)=>{if(state.taskTrackSequence!==trackingSequence||state.currentTaskID!==taskID||state.taskStream!==stream)return;renderTask(JSON.parse(event.data));};stream.onerror=()=>{if(state.taskTrackSequence!==trackingSequence||state.currentTaskID!==taskID||state.taskStream!==stream)return;stream.close();state.taskStream=null;pollTask(taskID,trackingSequence);};refreshTaskHistory(taskID).catch((error)=>toast(`任务列表刷新失败：${error.message}`,true));}
+    async function pollTask(taskID,trackingSequence){if(state.taskTrackSequence!==trackingSequence||state.currentTaskID!==taskID)return;try{const task=await api(`/api/tasks/${encodeURIComponent(taskID)}`);if(state.taskTrackSequence!==trackingSequence||state.currentTaskID!==taskID)return;renderTask(task);if(!isTerminal(task.status))state.taskPollTimer=setTimeout(()=>pollTask(taskID,trackingSequence),1500);}catch(error){if(state.taskTrackSequence!==trackingSequence||state.currentTaskID!==taskID)return;$('taskSummary').textContent=`任务状态读取失败：${error.message}`;state.taskPollTimer=setTimeout(()=>pollTask(taskID,trackingSequence),2500);}}
+    async function copyTaskCommand(value){if(!navigator.clipboard)return toast('浏览器不支持自动复制，请手动选择命令',true);try{await navigator.clipboard.writeText(value);toast('docker load 命令已复制');}catch(error){toast(`复制失败：${error.message}`,true);}}
+    function renderTask(task){if(!task||!task.id)return;const previousStatus=state.currentTaskStatus;state.currentTaskID=task.id;state.currentTaskStatus=task.status||'running';$('taskTitle').textContent=formatTaskTitle(task);if(Array.from($('taskHistory').options).some((option)=>option.value===task.id))$('taskHistory').value=task.id;const total=Number(task.bytes_total||0),done=Number(task.bytes_done||0);$('taskProgress').style.width=`${total?Math.min(100,done/total*100):(task.status==='done'?100:0)}%`;$('taskSummary').textContent=`${taskStatusLabel(task.status)}${task.message?` · ${task.message}`:''}`;$('taskSummary').className=task.status==='done'?'status-ok':['failed','canceled'].includes(task.status)?'status-bad':'';$('taskStage').textContent=task.stage||'-';$('taskPlatform').textContent=task.platform||'-';$('taskItem').textContent=task.total_images?`${task.current_image||0}/${task.total_images} images${task.total_layers?` · ${task.current_layer||0}/${task.total_layers} blobs`:''}`:task.total_layers?`${task.current_layer||0}/${task.total_layers}`:'-';$('taskRate').textContent=task.speed_bps?`${formatBytes(task.speed_bps)}/s${task.eta_seconds?` · ETA ${task.eta_seconds}s`:''}`:'-';clear($('taskOutputs'));(task.output_files||[]).forEach((value)=>$('taskOutputs').appendChild(node('div',{class:'task-item ok',text:value})));if(task.sync_result)(task.sync_result.items||[]).forEach((item)=>$('taskOutputs').appendChild(node('div',{class:`task-item ${item.status==='done'?'ok':'err'}`,text:`${item.status} · ${item.source}${item.target?` → ${item.target}`:''}${item.error?` · ${item.error}`:''}`})));clear($('taskCommands'));(task.docker_load_commands||[]).forEach((value)=>$('taskCommands').appendChild(node('div',{class:'task-command'},node('pre',{class:'task-item mono',text:value}),node('button',{class:'btn secondary small',type:'button',text:'复制',onclick:()=>copyTaskCommand(value)}))));$('taskError').classList.toggle('hidden',!task.error);$('taskError').textContent=task.error||'';if(isTerminal(task.status)){stopTaskTracking();$('cancelTask').disabled=true;if(!isTerminal(previousStatus))refreshTaskHistory(task.id).catch(()=>{});}else $('cancelTask').disabled=task.status!=='running';}
+    $('taskHistory').addEventListener('change',()=>{const task=state.tasks.find((item)=>item.id===$('taskHistory').value);if(!task)return;if(isTerminal(task.status)){stopTaskTracking();state.currentTaskID=task.id;renderTask(task);}else subscribeTask(task.id);});
+    $('refreshTasks').addEventListener('click',()=>withButtonBusy($('refreshTasks'),'…',async()=>{try{const tasks=await refreshTaskHistory(state.currentTaskID);const current=tasks.find((task)=>task.id===state.currentTaskID);if(current){renderTask(current);return;}const replacement=tasks.find((task)=>!isTerminal(task.status))||tasks[0];if(!replacement){resetTaskPanel();return;}if(isTerminal(replacement.status)){stopTaskTracking();state.currentTaskID=replacement.id;renderTask(replacement);}else subscribeTask(replacement.id);}catch(error){toast(error.message,true);}}));
+    $('cancelTask').addEventListener('click',async()=>{if(!state.currentTaskID||!await askConfirm('取消当前任务','当前网络请求会被中断；已完成的最终文件保持不变，未完成的临时文件不会替换正式 tar。'))return;try{await api(`/api/tasks/${encodeURIComponent(state.currentTaskID)}/cancel`,{method:'POST'});toast('已发送取消请求');}catch(error){toast(error.message,true);}});
 
-    function askConfirm(title,text){return new Promise((resolve)=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmText').textContent=text;const finish=(value)=>{dialog.close();$('confirmYes').onclick=null;$('confirmNo').onclick=null;resolve(value);};$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.showModal();});}
+    function askConfirm(title,text){return new Promise((resolve)=>{const dialog=$('confirmDialog');if(dialog.open){resolve(false);return;}$('confirmTitle').textContent=title;$('confirmText').textContent=text;let settled=false;const cleanup=()=>{dialog.removeEventListener('cancel',onCancel);$('confirmYes').onclick=null;$('confirmNo').onclick=null;};const finish=(value)=>{if(settled)return;settled=true;cleanup();if(dialog.open)dialog.close();resolve(value);};const onCancel=(event)=>{event.preventDefault();finish(false);};dialog.addEventListener('cancel',onCancel);$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.showModal();});}
 
     window.addEventListener('beforeunload',(event)=>{if(state.listDirty){event.preventDefault();event.returnValue='';}});
 
     loadSettings().catch((error)=>toast(`配置加载失败：${error.message}`,true));
+    restoreTask().catch((error)=>toast(`任务恢复失败：${error.message}`,true));
   </script>
 </body>
 </html>
