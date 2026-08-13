@@ -244,8 +244,9 @@ async function main() {
     await page.click(`#${comboID}-btn`);
     await page.click(`#${comboID} .combo-list li:has-text("${optionText}")`);
   };
-  const shoot = async (page, name) => {
+  const shoot = async (page, name, { keepToasts = false } = {}) => {
     await page.waitForTimeout(600);
+    if (!keepToasts) await page.evaluate(() => document.getElementById('toasts').replaceChildren());
     await page.screenshot({ path: join(outDir, `${name}.png`), fullPage: true });
     console.log(`captured ${name}.png`);
   };
@@ -253,16 +254,25 @@ async function main() {
   const { context, page } = await openPage({ width: 1440, height: 900 });
   await page.goto(`${origin}/#sync`, { waitUntil: 'networkidle' });
 
+  await pick(page, 'cmb-syncRemote', 'build-01');
   await pick(page, 'cmb-syncSourceRegistry', 'Docker Hub');
   await pick(page, 'cmb-syncTargetRegistry', 'Harbor 生产');
+  await pick(page, 'cmb-syncImageList', 'v3.5.10 发布集');
   await shoot(page, '01-sync');
 
   await page.click('#cmb-syncSourceRegistry-btn');
   await shoot(page, '02-sync-combobox');
   await page.keyboard.press('Escape');
+  await page.click('#cmb-syncSourceRegistry-btn');
 
   await page.click('#startSync');
+  await page.waitForSelector('#page-tasks.active');
   await shoot(page, '03-tasks');
+
+  await page.goto(`${origin}/#sync`, { waitUntil: 'networkidle' });
+  await pick(page, 'cmb-syncRemote', 'build-01');
+  await page.click('#probeSyncStorage');
+  await shoot(page, '03b-sync-storage');
 
   await page.goto(`${origin}/#harbor`, { waitUntil: 'networkidle' });
   await pick(page, 'cmb-harborRegistry', 'Harbor 生产');

@@ -77,11 +77,12 @@
     .mini-task {
       margin-top: auto; text-align: left; cursor: pointer; width: 100%;
       border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2);
-      padding: 10px; display: grid; gap: 7px; transition: border-color .12s ease, box-shadow .12s ease;
+      padding: 10px; display: grid; gap: 7px; overflow: hidden; min-width: 0;
+      transition: border-color .12s ease, box-shadow .12s ease;
     }
     .mini-task:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
-    .mini-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
-    .mini-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mini-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; min-width: 0; }
+    .mini-row span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
     .dot.run { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
     .dot.ok { background: var(--ok); }
@@ -92,7 +93,7 @@
     .mini-sub { font-size: 11.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .side-foot { display: grid; gap: 4px; padding: 0 8px 2px; }
     .side-foot .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-3); }
-    .side-foot .kv strong { color: var(--text-2); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .side-foot .kv strong { color: var(--text-2); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     main { min-width: 0; padding: 22px 26px 56px; }
     .page { display: none; }
@@ -177,7 +178,7 @@
     .combo-btn:focus-visible, .combo[data-open=true] .combo-btn { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37, 99, 235, .12); }
     .combo-btn:disabled { background: var(--surface-2); color: var(--text-3); cursor: not-allowed; }
     .combo-btn .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-    .combo-btn .txt.empty { color: var(--text-3); }
+    .combo-btn .txt.is-placeholder { color: var(--text-3); }
     .combo-btn .caret { width: 0; height: 0; flex: none; border: 4px solid transparent; border-top-color: var(--text-2); margin-top: 3px; }
     .combo-pop {
       position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; min-width: 240px;
@@ -901,7 +902,7 @@
       this.activeIndex = -1;
 
       this.button = node('button', { class: 'combo-btn', type: 'button', id: `${hostID}-btn`, role: 'combobox', 'aria-expanded': 'false', 'aria-haspopup': 'listbox' },
-        node('span', { class: 'txt empty', text: placeholder }), node('span', { class: 'caret' }));
+        node('span', { class: 'txt is-placeholder', text: placeholder }), node('span', { class: 'caret' }));
       this.search = node('input', { class: 'combo-search', type: 'text', placeholder: '搜索…', autocomplete: 'off' });
       this.list = node('ul', { class: 'combo-list', role: 'listbox' });
       this.emptyNote = node('div', { class: 'combo-empty', text: '无匹配项' });
@@ -939,7 +940,7 @@
       const item = this.selectedItem;
       const text = this.button.querySelector('.txt');
       text.textContent = item && item.label ? item.label : this.placeholder;
-      text.classList.toggle('empty', !item || !item.value);
+      text.classList.toggle('is-placeholder', !item || !item.value);
     }
     select(value, notify = true) {
       if (this._value === value) { this.close(); return; }
