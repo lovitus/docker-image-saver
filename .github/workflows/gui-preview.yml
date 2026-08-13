@@ -1,0 +1,99 @@
+name: gui-preview
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/gui-preview/**'
+      - '.github/workflows/gui-preview.yml'
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'web/**'
+      - '.github/gui-preview/**'
+      - '.github/workflows/gui-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Screenshots catch layout regressions automatically; the binary job exists so a
+  # maintainer can exercise the real GUI from a checksum-verified CI artifact instead
+  # of building it locally. These artifacts are review aids and never release assets.
+  screenshots:
+    name: screenshots
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check embedded GUI JavaScript
+        run: awk '/<script>/{flag=1;next}/<\/script>/{flag=0}flag' web/index.html | node --check -
+
+      - name: Install Playwright
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Render GUI against stub API
+        env:
+          OUT_DIR: ${{ runner.temp }}/gui-preview
+        run: node .github/gui-preview/preview.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-preview
+          path: ${{ runner.temp }}/gui-preview/*.png
+          if-no-files-found: error
+
+  binary:
+    name: binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build reviewable preview binaries
+        env:
+          PREVIEW_VERSION: ${{ github.ref_name }}-${{ github.sha }}-preview
+        run: |
+          set -euo pipefail
+          mkdir -p preview-bin
+
+          for target in darwin/arm64 darwin/amd64 linux/amd64 windows/amd64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then
+              EXT=".exe"
+            fi
+            echo "-> $target"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags "-s -w -X main.version=${PREVIEW_VERSION}" \
+              -o "preview-bin/dia_${GOOS}_${GOARCH}${EXT}" .
+          done
+
+          (cd preview-bin && sha256sum * > checksums.txt && cat checksums.txt)
+
+      - name: Upload preview binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: dia-preview-binaries
+          path: preview-bin/*
+          if-no-files-found: error

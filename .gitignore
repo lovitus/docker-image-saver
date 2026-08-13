@@ -7,5 +7,10 @@
 # archives
 *.tar
 
+# ci tooling
+/node_modules/
+/gui-preview-out/
+/preview-bin/
+
 # misc
 .DS_Store

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Added a `gui-preview` workflow that renders every GUI page against a stub API in CI, uploads desktop and mobile screenshots, and fails on page JavaScript errors.
+- Added checksum-verified `dia-preview-binaries` artifacts to the same workflow so maintainers can exercise the GUI from CI output instead of building locally.
+
+### Changed
+
+- Rebuilt the embedded GUI with a light, high-density layout: sidebar navigation, per-page cards, and a dedicated task page replacing the cramped task rail.
+- Replaced every dependent dropdown (registries, accounts, execution machines, Harbor projects and repositories, image lists) with searchable comboboxes that load their dependants automatically.
+- Added inline field validation, panel-level result banners, empty states, and busy indicators to the sync, Harbor, remote-file, export, and settings forms.
+- Remote file browsing now offers clickable path breadcrumbs, row-level directory navigation, and disk-usage cards with utilization bars.
+
 ## v1.3.1 - 2026-08-10
 
 ### Added
