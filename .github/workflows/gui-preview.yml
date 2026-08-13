@@ -1,0 +1,54 @@
+name: gui-preview
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'web/**'
+      - '.github/gui-preview/**'
+      - '.github/workflows/gui-preview.yml'
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'web/**'
+      - '.github/gui-preview/**'
+      - '.github/workflows/gui-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: screenshots
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check embedded GUI JavaScript
+        run: awk '/<script>/{flag=1;next}/<\/script>/{flag=0}flag' web/index.html | node --check -
+
+      - name: Install Playwright
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Render GUI against stub API
+        env:
+          OUT_DIR: ${{ runner.temp }}/gui-preview
+        run: node .github/gui-preview/preview.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gui-preview
+          path: ${{ runner.temp }}/gui-preview/*.png
+          if-no-files-found: error

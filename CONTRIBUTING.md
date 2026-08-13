@@ -19,6 +19,10 @@ git diff --check
 
 Unit tests, race detection, `go vet`, module reproducibility checks, and all supported target builds run only in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
+## GUI preview
+
+Do not serve `web/index.html` locally. [`.github/workflows/gui-preview.yml`](.github/workflows/gui-preview.yml) renders the embedded GUI against the stub API in [`.github/gui-preview/preview.mjs`](.github/gui-preview/preview.mjs), captures desktop and mobile screenshots of every page, and fails when the page raises a JavaScript error. It runs automatically for changes under `web/`, and can be started manually from the Actions tab; download the `gui-preview` artifact to review the result.
+
 ## Private environment validation
 
 Registry/Harbor connectivity, SSH execution-machine behavior, remote storage, and `docker load` compatibility are validated on maintainer-approved private hosts instead of GitHub-hosted runners. The workstation may only use `ssh`, `scp`, or `rsync` to orchestrate an isolated remote directory. Execute only checksum-verified workflow artifacts, do not commit private host metadata or credentials, and do not write to production registries unless a maintainer explicitly identifies a test target.

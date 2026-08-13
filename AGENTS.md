@@ -11,7 +11,7 @@ Local execution is limited to source inspection, syntax/format validation, and o
 - non-executing repository inspection such as `git diff`, `git status`, `rg`, and file reads
 - `ssh`, `scp`, or `rsync` commands whose only purpose is to run an isolated environment validation on a maintainer-approved private host
 
-Do not run local unit tests, integration tests, race tests, `go vet`, cross-compilation, packaging, checksum generation, or release uploads. In particular, do not run `go test`, `go vet`, or `go build` locally as a substitute for CI.
+Do not run local unit tests, integration tests, race tests, `go vet`, cross-compilation, packaging, checksum generation, or release uploads. In particular, do not run `go test`, `go vet`, or `go build` locally as a substitute for CI. Do not serve the embedded GUI locally either; visual review of `web/index.html` happens through the `gui-preview` workflow artifact.
 
 ## Private Environment Validation
 
