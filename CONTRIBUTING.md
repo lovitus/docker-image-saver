@@ -23,6 +23,18 @@ Unit tests, race detection, `go vet`, module reproducibility checks, and all sup
 
 Do not serve `web/index.html` locally. [`.github/workflows/gui-preview.yml`](.github/workflows/gui-preview.yml) renders the embedded GUI against the stub API in [`.github/gui-preview/preview.mjs`](.github/gui-preview/preview.mjs), captures desktop and mobile screenshots of every page, and fails when the page raises a JavaScript error. It runs automatically for changes under `web/`, and can be started manually from the Actions tab; download the `gui-preview` artifact to review the result.
 
+The same workflow publishes a `dia-preview-binaries` artifact so a maintainer can exercise the real GUI without building anything locally. Verify the checksum before running it:
+
+```sh
+gh run download <run-id> -n dia-preview-binaries -D preview-bin
+(cd preview-bin && shasum -a 256 -c checksums.txt --ignore-missing)
+chmod +x preview-bin/dia_darwin_arm64
+xattr -d com.apple.quarantine preview-bin/dia_darwin_arm64 2>/dev/null || true
+preview-bin/dia_darwin_arm64 gui
+```
+
+These artifacts are review aids. Release assets still come only from [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
 ## Private environment validation
 
 Registry/Harbor connectivity, SSH execution-machine behavior, remote storage, and `docker load` compatibility are validated on maintainer-approved private hosts instead of GitHub-hosted runners. The workstation may only use `ssh`, `scp`, or `rsync` to orchestrate an isolated remote directory. Execute only checksum-verified workflow artifacts, do not commit private host metadata or credentials, and do not write to production registries unless a maintainer explicitly identifies a test target.

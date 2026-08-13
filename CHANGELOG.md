@@ -5,6 +5,7 @@
 ### Added
 
 - Added a `gui-preview` workflow that renders every GUI page against a stub API in CI, uploads desktop and mobile screenshots, and fails on page JavaScript errors.
+- Added checksum-verified `dia-preview-binaries` artifacts to the same workflow so maintainers can exercise the GUI from CI output instead of building locally.
 
 ### Changed
 
